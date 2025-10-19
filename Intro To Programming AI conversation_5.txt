@@ -1,0 +1,5038 @@
+﻿====
+
+
+Final testing and improving
+
+
+====
+
+
+Tool used: Claude
+Time: 17/10/2025
+
+
+===
+
+
+Summary:
+In this example, I asked for a function, tested it, and kept writing improvement prompts based on the test result. I tried to act as a QA and test all the possible errors when a user uses the program, and ask Claude - the programmer - to fix the code accordingly until satisfaction. 
+
+
+This strategy allows me to test the code and identify the missing areas that need to be improved, and highlights intentional prompting. 
+
+
+===
+
+
+Before improvement prompt code:
+"""
+WEATHER DASHBOARD - MAIN APPLICATION
+====================================
+Refactored version with improved architecture, modularity, and maintainability.
+"""
+
+
+import sys
+import logging
+from datetime import datetime
+from typing import Callable, Dict, Optional, List
+from functools import wraps
+
+
+# ============================================
+# LOGGING CONFIGURATION
+# ============================================
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================
+# DEPENDENCY & FUNCTION REGISTRY
+# ============================================
+
+
+class DependencyManager:
+    """Centralized dependency and function validation."""
+    
+    REQUIRED_MODULES = {
+        'requests': 'API calls',
+        'pandas': 'Data processing',
+        'matplotlib': 'Visualizations',
+    }
+    
+    OPTIONAL_MODULES = {
+        'pyinputplus': 'Terminal menu',
+        'ipywidgets': 'Jupyter widgets'
+    }
+    
+    # Registry of required functions (set by external code)
+    function_registry: Dict[str, Callable] = {}
+    
+    @classmethod
+    def register_function(cls, name: str, func: Callable):
+        """Register a function in the global registry."""
+        cls.function_registry[name] = func
+    
+    @classmethod
+    def get_function(cls, name: str) -> Optional[Callable]:
+        """Retrieve a registered function."""
+        return cls.function_registry.get(name)
+    
+    @classmethod
+    def check_dependencies(cls) -> Dict[str, bool]:
+        """Check all required dependencies."""
+        results = {'required': {}, 'optional': {}}
+        
+        for module, purpose in cls.REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+                results['required'][module] = True
+            except ImportError:
+                results['required'][module] = False
+                logger.warning(f"Missing required module: {module} ({purpose})")
+        
+        for module, purpose in cls.OPTIONAL_MODULES.items():
+            try:
+                __import__(module)
+                results['optional'][module] = True
+            except ImportError:
+                results['optional'][module] = False
+                logger.info(f"Optional module not available: {module} ({purpose})")
+        
+        return results
+    
+    @classmethod
+    def check_functions(cls, required_functions: List[str]) -> Dict[str, bool]:
+        """Check if required functions are registered."""
+        results = {}
+        for func_name in required_functions:
+            results[func_name] = func_name in cls.function_registry
+            if not results[func_name]:
+                logger.warning(f"Missing required function: {func_name}")
+        return results
+    
+    @classmethod
+    def all_dependencies_met(cls) -> bool:
+        """Check if all required dependencies are available."""
+        deps = cls.check_dependencies()
+        return all(deps['required'].values())
+    
+    @classmethod
+    def all_functions_available(cls, required_functions: List[str]) -> bool:
+        """Check if all required functions are available."""
+        funcs = cls.check_functions(required_functions)
+        return all(funcs.values())
+
+
+
+
+# ============================================
+# ERROR HANDLING DECORATORS
+# ============================================
+
+
+def handle_errors(default_return=None):
+    """Unified error handler decorator."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                logger.info("\nOperation cancelled by user")
+                return default_return
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default_return
+        return wrapper
+    return decorator
+
+
+
+
+# ============================================
+# UI ABSTRACTION LAYER
+# ============================================
+
+
+class UserInterface:
+    """Abstract interface for user interaction - decouples UI from logic."""
+    
+    @staticmethod
+    def display_banner(title: str, subtitle: str = ""):
+        """Display a formatted banner."""
+        print("\n" + "="*70)
+        print(f"{title:^70}")
+        if subtitle:
+            print(f"{subtitle:^70}")
+        print("="*70 + "\n")
+    
+    @staticmethod
+    def display_section(title: str, icon: str = ""):
+        """Display a section header."""
+        print(f"\n{icon} {title}")
+        print("-"*70)
+    
+    @staticmethod
+    def display_message(message: str, msg_type: str = "info"):
+        """Display a formatted message."""
+        icons = {
+            'success': '✓',
+            'error': '❌',
+            'warning': '⚠️',
+            'info': 'ℹ️',
+            'question': '❓'
+        }
+        icon = icons.get(msg_type, '')
+        print(f"{icon} {message}")
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        """Get user input with prompt."""
+        try:
+            value = input(f"{prompt}: ").strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return ""
+    
+    @staticmethod
+    def get_choice(prompt: str, options: List[str]) -> str:
+        """Get user choice from options."""
+        print(f"\n{prompt}\n")
+        for i, option in enumerate(options, 1):
+            print(f"{i}. {option}")
+        
+        while True:
+            choice = UserInterface.get_input("\nEnter your choice")
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                return options[int(choice) - 1]
+            UserInterface.display_message("Invalid choice. Please try again.", "error")
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = True) -> bool:
+        """Get yes/no confirmation."""
+        default_str = "Y/n" if default else "y/N"
+        response = UserInterface.get_input(f"{prompt} ({default_str})")
+        
+        if not response:
+            return default
+        return response.lower() in ['y', 'yes']
+
+
+
+
+# ============================================
+# BUSINESS LOGIC LAYER
+# ============================================
+
+
+class WeatherService:
+    """Service layer for weather operations - separates logic from UI."""
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def fetch_weather(city: str) -> Optional[Dict]:
+        """Fetch weather data for a city."""
+        get_weather = DependencyManager.get_function('get_weather_data_openweather')
+        if not get_weather:
+            logger.error("Weather fetch function not available")
+            return None
+        return get_weather(city)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def parse_question(question: str, use_ollama: bool = False) -> Optional[Dict]:
+        """Parse a natural language question."""
+        parse_func = DependencyManager.get_function('parse_weather_question')
+        if not parse_func:
+            logger.error("Question parser not available")
+            return None
+        return parse_func(question, use_ollama=use_ollama)
+    
+    @staticmethod
+    @handle_errors(default_return="")
+    def generate_response(parsed: Dict, weather_data: Dict) -> str:
+        """Generate response from parsed question and weather data."""
+        response_func = DependencyManager.get_function('generate_weather_response')
+        if not response_func:
+            logger.error("Response generator not available")
+            return ""
+        return response_func(parsed, weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def display_weather(weather_data: Dict):
+        """Display weather data."""
+        display_func = DependencyManager.get_function('display_weather_for_city')
+        if display_func:
+            display_func(weather_data)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def process_to_dataframe(weather_data: Dict):
+        """Process weather data to DataFrame."""
+        process_func = DependencyManager.get_function('process_weather_to_dataframe')
+        if not process_func:
+            return None
+        return process_func(weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def visualize(df, city: str):
+        """Create visualizations."""
+        viz_func = DependencyManager.get_function('visualize_weather_data')
+        if viz_func and df is not None:
+            viz_func(df, city)
+
+
+
+
+# ============================================
+# APPLICATION MODES
+# ============================================
+
+
+class ApplicationMode:
+    """Base class for application modes."""
+    
+    def __init__(self, ui: UserInterface):
+        self.ui = ui
+        self.service = WeatherService()
+    
+    def run(self):
+        """Execute the mode. Override in subclasses."""
+        raise NotImplementedError
+
+
+
+
+class NaturalLanguageMode(ApplicationMode):
+    """Natural language question mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_banner("💬 NATURAL LANGUAGE MODE")
+        self.ui.display_message("Ask questions in plain English. Type 'exit' to return.", "info")
+        
+        examples = [
+            "What's the temperature in London?",
+            "Will it rain tomorrow in Paris?",
+            "How windy is it in Tokyo?"
+        ]
+        print("\nExamples:")
+        for ex in examples:
+            print(f"  • {ex}")
+        print()
+        
+        while True:
+            question = self.ui.get_input("\n❓ Your question")
+            
+            if question.lower() in ['exit', 'quit', 'back']:
+                break
+            
+            if not question:
+                continue
+            
+            use_ai = self.ui.confirm("🤖 Use AI (Ollama)?", default=False)
+            
+            # Parse and process
+            parsed = self.service.parse_question(question, use_ai)
+            
+            if not parsed or not parsed.get('success'):
+                error = parsed.get('error', 'Unknown error') if parsed else 'Parsing failed'
+                self.ui.display_message(error, "error")
+                continue
+            
+            self.ui.display_message(f"Understood: {parsed['query_type']} for {parsed['city']}", "success")
+            
+            # Fetch weather
+            weather_data = self.service.fetch_weather(parsed['city'])
+            
+            if not weather_data:
+                self.ui.display_message(f"Could not fetch weather for {parsed['city']}", "error")
+                continue
+            
+            # Generate and display response
+            response = self.service.generate_response(parsed, weather_data)
+            self.ui.display_section("🤖 ANSWER", "")
+            print(response)
+            print("="*70)
+
+
+
+
+class QuickCheckMode(ApplicationMode):
+    """Quick weather check mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_banner("🚀 QUICK WEATHER CHECK")
+        
+        city = self.ui.get_input("📍 Enter city name")
+        
+        if not city or city.lower() in ['exit', 'quit']:
+            return
+        
+        self.ui.display_message(f"Fetching weather for {city}...", "info")
+        
+        weather_data = self.service.fetch_weather(city)
+        
+        if not weather_data:
+            self.ui.display_message(f"Could not fetch weather for {city}", "error")
+            return
+        
+        self.service.display_weather(weather_data)
+        
+        if self.ui.confirm("\n📊 Show visualizations?", default=False):
+            df = self.service.process_to_dataframe(weather_data)
+            if df is not None:
+                print("\n📊 Weather Data Table:")
+                print("="*70)
+                print(df.to_string(index=False))
+                print("\n🎨 Generating visualizations...")
+                self.service.visualize(df, city)
+        
+        self.ui.display_message("Quick check complete!", "success")
+
+
+
+
+class MenuMode(ApplicationMode):
+    """Terminal or Jupyter menu mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_message("Starting menu mode...", "info")
+        
+        # Try terminal menu first
+        menu_func = DependencyManager.get_function('weather_menu_pyinputplus')
+        if menu_func:
+            menu_func()
+            return
+        
+        # Try Jupyter menu
+        menu_func = DependencyManager.get_function('weather_menu_ipywidgets')
+        if menu_func:
+            menu_func()
+            return
+        
+        self.ui.display_message("No menu interface available", "error")
+
+
+
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
+
+
+class WeatherDashboardApp:
+    """Main application orchestrator."""
+    
+    REQUIRED_FUNCTIONS = [
+        'get_weather_data_openweather',
+        'parse_weather_question',
+        'generate_weather_response',
+        'display_weather_for_city',
+        'process_weather_to_dataframe',
+        'visualize_weather_data'
+    ]
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.running = False
+        self.modes = {
+            '🖥️ Terminal Menu': MenuMode,
+            '💬 Natural Language': NaturalLanguageMode,
+            '🚀 Quick Check': QuickCheckMode,
+            '❌ Exit': None
+        }
+    
+    def check_system(self) -> bool:
+        """Perform system checks."""
+        self.ui.display_section("SYSTEM CHECK", "🔍")
+        
+        # Check dependencies
+        if not DependencyManager.all_dependencies_met():
+            self.ui.display_message("Missing required dependencies", "error")
+            deps = DependencyManager.check_dependencies()
+            missing = [m for m, available in deps['required'].items() if not available]
+            print(f"\nInstall with: pip install {' '.join(missing)}")
+            return False
+        
+        self.ui.display_message("All dependencies available", "success")
+        
+        # Check functions
+        if not DependencyManager.all_functions_available(self.REQUIRED_FUNCTIONS):
+            self.ui.display_message("Missing required functions", "error")
+            print("\nPlease run all previous cells before starting the application.")
+            return False
+        
+        self.ui.display_message("All functions available", "success")
+        return True
+    
+    def run(self):
+        """Main application loop."""
+        self.ui.display_banner(
+            "🌤️ WEATHER DASHBOARD APPLICATION ⛅",
+            f"Version 1.0.0 • {datetime.now().strftime('%B %d, %Y')}"
+        )
+        
+        if not self.check_system():
+            self.ui.display_message("System check failed. Cannot start application.", "error")
+            return
+        
+        self.ui.display_message("System ready!", "success")
+        self.running = True
+        
+        while self.running:
+            mode_choice = self.ui.get_choice(
+                "Select interface mode:",
+                list(self.modes.keys())
+            )
+            
+            if mode_choice == '❌ Exit':
+                self.running = False
+                self.ui.display_banner("👋 Thank you for using Weather Dashboard!")
+                break
+            
+            # Get mode class and instantiate
+            mode_class = self.modes.get(mode_choice)
+            if mode_class:
+                mode = mode_class(self.ui)
+                mode.run()
+            
+            if self.running:
+                if not self.ui.confirm("\n↩️ Return to main menu?", default=True):
+                    self.running = False
+                    self.ui.display_message("Goodbye!", "success")
+
+
+
+
+# ============================================
+# FUNCTION REGISTRATION HELPER
+# ============================================
+
+
+def register_weather_functions():
+    """
+    Register all weather functions in the dependency manager.
+    Call this after defining your functions.
+    """
+    function_map = {
+        'get_weather_data_openweather': 'get_weather_data_openweather',
+        'display_weather_for_city': 'display_weather_for_city',
+        'create_weather_dashboard': 'create_weather_dashboard',
+        'validate_city_input': 'validate_city_input',
+        'parse_weather_question': 'parse_weather_question',
+        'generate_weather_response': 'generate_weather_response',
+        'process_weather_to_dataframe': 'process_weather_to_dataframe',
+        'visualize_weather_data': 'visualize_weather_data',
+        'weather_menu_pyinputplus': 'weather_menu_pyinputplus',
+        'weather_menu_ipywidgets': 'weather_menu_ipywidgets'
+    }
+    
+    # Try to get functions from globals
+    for func_name, global_name in function_map.items():
+        if global_name in globals():
+            DependencyManager.register_function(func_name, globals()[global_name])
+        else:
+            logger.debug(f"Function {func_name} not found in globals")
+
+
+
+
+# ============================================
+# ENTRY POINT
+# ============================================
+
+
+def start_weather_dashboard():
+    """Main entry point."""
+    print("🚀 Initializing Weather Dashboard...\n")
+    
+    # Register functions
+    register_weather_functions()
+    
+    # Start application
+    app = WeatherDashboardApp()
+    app.run()
+
+
+
+
+# Auto-start when run directly
+if __name__ == "__main__":
+    start_weather_dashboard()
+
+
+
+
+# ============================================
+# USAGE DOCUMENTATION
+# ============================================
+
+
+"""
+REFACTORED ARCHITECTURE BENEFITS:
+=================================
+
+
+1. FUNCTION REGISTRY SYSTEM
+   - No longer relies on globals() for validation
+   - Explicit function registration via DependencyManager
+   - Works in any environment (Jupyter, modules, imports)
+
+
+2. MODULAR ERROR HANDLING
+   - @handle_errors decorator for consistent error handling
+   - No duplicated try/except blocks
+   - Centralized error logging
+
+
+3. SEPARATION OF CONCERNS
+   - UserInterface: All UI interactions
+   - WeatherService: All business logic
+   - ApplicationMode: Mode implementations
+   - WeatherDashboardApp: Orchestration
+
+
+4. EFFICIENT DEPENDENCY CHECKING
+   - One-time check at startup
+   - Structured feedback via logging
+   - Clear error messages
+
+
+5. DECOUPLED UI AND LOGIC
+   - Easy to add new interfaces (GUI, API, CLI)
+   - Business logic is reusable
+   - Testing is simpler
+
+
+USAGE:
+======
+
+
+# Method 1: Auto-start (run this cell)
+# The application starts automatically
+
+
+# Method 2: Manual start
+start_weather_dashboard()
+
+
+# Method 3: Register external functions
+from my_module import get_weather_data_openweather
+DependencyManager.register_function('get_weather_data_openweather', get_weather_data_openweather)
+start_weather_dashboard()
+
+
+EXTENDING THE APPLICATION:
+=========================
+
+
+# Add a new mode:
+class MyCustomMode(ApplicationMode):
+    def run(self):
+        self.ui.display_banner("My Custom Mode")
+        # Your logic here
+
+
+# Register it:
+app.modes['🎨 Custom Mode'] = MyCustomMode
+"""
+
+
+My follow-up prompt for improvement: I think it'd be even better if you create a loop so that users can choose to go back to the main menu after using the function, and continue until they close the app
+
+
+1st improved code:
+"""
+WEATHER DASHBOARD - MAIN APPLICATION
+====================================
+Refactored version with improved architecture, modularity, and maintainability.
+"""
+
+
+import sys
+import logging
+from datetime import datetime
+from typing import Callable, Dict, Optional, List
+from functools import wraps
+
+
+# ============================================
+# LOGGING CONFIGURATION
+# ============================================
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================
+# DEPENDENCY & FUNCTION REGISTRY
+# ============================================
+
+
+class DependencyManager:
+    """Centralized dependency and function validation."""
+    
+    REQUIRED_MODULES = {
+        'requests': 'API calls',
+        'pandas': 'Data processing',
+        'matplotlib': 'Visualizations',
+    }
+    
+    OPTIONAL_MODULES = {
+        'pyinputplus': 'Terminal menu',
+        'ipywidgets': 'Jupyter widgets'
+    }
+    
+    # Registry of required functions (set by external code)
+    function_registry: Dict[str, Callable] = {}
+    
+    @classmethod
+    def register_function(cls, name: str, func: Callable):
+        """Register a function in the global registry."""
+        cls.function_registry[name] = func
+    
+    @classmethod
+    def get_function(cls, name: str) -> Optional[Callable]:
+        """Retrieve a registered function."""
+        return cls.function_registry.get(name)
+    
+    @classmethod
+    def check_dependencies(cls) -> Dict[str, bool]:
+        """Check all required dependencies."""
+        results = {'required': {}, 'optional': {}}
+        
+        for module, purpose in cls.REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+                results['required'][module] = True
+            except ImportError:
+                results['required'][module] = False
+                logger.warning(f"Missing required module: {module} ({purpose})")
+        
+        for module, purpose in cls.OPTIONAL_MODULES.items():
+            try:
+                __import__(module)
+                results['optional'][module] = True
+            except ImportError:
+                results['optional'][module] = False
+                logger.info(f"Optional module not available: {module} ({purpose})")
+        
+        return results
+    
+    @classmethod
+    def check_functions(cls, required_functions: List[str]) -> Dict[str, bool]:
+        """Check if required functions are registered."""
+        results = {}
+        for func_name in required_functions:
+            results[func_name] = func_name in cls.function_registry
+            if not results[func_name]:
+                logger.warning(f"Missing required function: {func_name}")
+        return results
+    
+    @classmethod
+    def all_dependencies_met(cls) -> bool:
+        """Check if all required dependencies are available."""
+        deps = cls.check_dependencies()
+        return all(deps['required'].values())
+    
+    @classmethod
+    def all_functions_available(cls, required_functions: List[str]) -> bool:
+        """Check if all required functions are available."""
+        funcs = cls.check_functions(required_functions)
+        return all(funcs.values())
+
+
+
+
+# ============================================
+# ERROR HANDLING DECORATORS
+# ============================================
+
+
+def handle_errors(default_return=None):
+    """Unified error handler decorator."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                logger.info("\nOperation cancelled by user")
+                return default_return
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default_return
+        return wrapper
+    return decorator
+
+
+
+
+# ============================================
+# UI ABSTRACTION LAYER
+# ============================================
+
+
+class UserInterface:
+    """Abstract interface for user interaction - decouples UI from logic."""
+    
+    @staticmethod
+    def display_banner(title: str, subtitle: str = ""):
+        """Display a formatted banner."""
+        print("\n" + "="*70)
+        print(f"{title:^70}")
+        if subtitle:
+            print(f"{subtitle:^70}")
+        print("="*70 + "\n")
+    
+    @staticmethod
+    def display_section(title: str, icon: str = ""):
+        """Display a section header."""
+        print(f"\n{icon} {title}")
+        print("-"*70)
+    
+    @staticmethod
+    def display_message(message: str, msg_type: str = "info"):
+        """Display a formatted message."""
+        icons = {
+            'success': '✓',
+            'error': '❌',
+            'warning': '⚠️',
+            'info': 'ℹ️',
+            'question': '❓'
+        }
+        icon = icons.get(msg_type, '')
+        print(f"{icon} {message}")
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        """Get user input with prompt."""
+        try:
+            value = input(f"{prompt}: ").strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return ""
+    
+    @staticmethod
+    def get_choice(prompt: str, options: List[str]) -> str:
+        """Get user choice from options."""
+        print(f"\n{prompt}\n")
+        for i, option in enumerate(options, 1):
+            print(f"{i}. {option}")
+        
+        while True:
+            choice = UserInterface.get_input("\nEnter your choice")
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                return options[int(choice) - 1]
+            UserInterface.display_message("Invalid choice. Please try again.", "error")
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = True) -> bool:
+        """Get yes/no confirmation."""
+        default_str = "Y/n" if default else "y/N"
+        response = UserInterface.get_input(f"{prompt} ({default_str})")
+        
+        if not response:
+            return default
+        return response.lower() in ['y', 'yes']
+
+
+
+
+# ============================================
+# BUSINESS LOGIC LAYER
+# ============================================
+
+
+class WeatherService:
+    """Service layer for weather operations - separates logic from UI."""
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def fetch_weather(city: str) -> Optional[Dict]:
+        """Fetch weather data for a city."""
+        get_weather = DependencyManager.get_function('get_weather_data_openweather')
+        if not get_weather:
+            logger.error("Weather fetch function not available")
+            return None
+        return get_weather(city)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def parse_question(question: str, use_ollama: bool = False) -> Optional[Dict]:
+        """Parse a natural language question."""
+        parse_func = DependencyManager.get_function('parse_weather_question')
+        if not parse_func:
+            logger.error("Question parser not available")
+            return None
+        return parse_func(question, use_ollama=use_ollama)
+    
+    @staticmethod
+    @handle_errors(default_return="")
+    def generate_response(parsed: Dict, weather_data: Dict) -> str:
+        """Generate response from parsed question and weather data."""
+        response_func = DependencyManager.get_function('generate_weather_response')
+        if not response_func:
+            logger.error("Response generator not available")
+            return ""
+        return response_func(parsed, weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def display_weather(weather_data: Dict):
+        """Display weather data."""
+        display_func = DependencyManager.get_function('display_weather_for_city')
+        if display_func:
+            display_func(weather_data)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def process_to_dataframe(weather_data: Dict):
+        """Process weather data to DataFrame."""
+        process_func = DependencyManager.get_function('process_weather_to_dataframe')
+        if not process_func:
+            return None
+        return process_func(weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def visualize(df, city: str):
+        """Create visualizations."""
+        viz_func = DependencyManager.get_function('visualize_weather_data')
+        if viz_func and df is not None:
+            viz_func(df, city)
+
+
+
+
+# ============================================
+# APPLICATION MODES
+# ============================================
+
+
+class ApplicationMode:
+    """Base class for application modes."""
+    
+    def __init__(self, ui: UserInterface):
+        self.ui = ui
+        self.service = WeatherService()
+    
+    def run(self):
+        """Execute the mode. Override in subclasses."""
+        raise NotImplementedError
+
+
+
+
+class NaturalLanguageMode(ApplicationMode):
+    """Natural language question mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("💬 NATURAL LANGUAGE MODE")
+            self.ui.display_message("Ask questions in plain English. Type 'menu' to return to main menu.", "info")
+            
+            examples = [
+                "What's the temperature in London?",
+                "Will it rain tomorrow in Paris?",
+                "How windy is it in Tokyo?"
+            ]
+            print("\nExamples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print()
+            
+            question = self.ui.get_input("\n❓ Your question")
+            
+            if question.lower() in ['exit', 'quit', 'back', 'menu']:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            if not question:
+                continue
+            
+            use_ai = self.ui.confirm("🤖 Use AI (Ollama)?", default=False)
+            
+            # Parse and process
+            parsed = self.service.parse_question(question, use_ai)
+            
+            if not parsed or not parsed.get('success'):
+                error = parsed.get('error', 'Unknown error') if parsed else 'Parsing failed'
+                self.ui.display_message(error, "error")
+            else:
+                self.ui.display_message(f"Understood: {parsed['query_type']} for {parsed['city']}", "success")
+                
+                # Fetch weather
+                weather_data = self.service.fetch_weather(parsed['city'])
+                
+                if weather_data:
+                    # Generate and display response
+                    response = self.service.generate_response(parsed, weather_data)
+                    self.ui.display_section("🤖 ANSWER", "")
+                    print(response)
+                    print("="*70)
+                else:
+                    self.ui.display_message(f"Could not fetch weather for {parsed['city']}", "error")
+            
+            # Ask if user wants to continue in this mode or return to menu
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["❓ Ask another question", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class QuickCheckMode(ApplicationMode):
+    """Quick weather check mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_banner("🚀 QUICK WEATHER CHECK")
+        
+        city = self.ui.get_input("📍 Enter city name")
+        
+        if not city or city.lower() in ['exit', 'quit']:
+            return
+        
+        self.ui.display_message(f"Fetching weather for {city}...", "info")
+        
+        weather_data = self.service.fetch_weather(city)
+        
+        if not weather_data:
+            self.ui.display_message(f"Could not fetch weather for {city}", "error")
+            return
+        
+        self.service.display_weather(weather_data)
+        
+        if self.ui.confirm("\n📊 Show visualizations?", default=False):
+            df = self.service.process_to_dataframe(weather_data)
+            if df is not None:
+                print("\n📊 Weather Data Table:")
+                print("="*70)
+                print(df.to_string(index=False))
+                print("\n🎨 Generating visualizations...")
+                self.service.visualize(df, city)
+        
+        self.ui.display_message("Quick check complete!", "success")
+
+
+
+
+class MenuMode(ApplicationMode):
+    """Terminal or Jupyter menu mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_message("Starting menu mode...", "info")
+        
+        # Try terminal menu first
+        menu_func = DependencyManager.get_function('weather_menu_pyinputplus')
+        if menu_func:
+            menu_func()
+            return
+        
+        # Try Jupyter menu
+        menu_func = DependencyManager.get_function('weather_menu_ipywidgets')
+        if menu_func:
+            menu_func()
+            return
+        
+        self.ui.display_message("No menu interface available", "error")
+
+
+
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
+
+
+class WeatherDashboardApp:
+    """Main application orchestrator."""
+    
+    REQUIRED_FUNCTIONS = [
+        'get_weather_data_openweather',
+        'parse_weather_question',
+        'generate_weather_response',
+        'display_weather_for_city',
+        'process_weather_to_dataframe',
+        'visualize_weather_data'
+    ]
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.running = False
+        self.modes = {
+            '🖥️ Terminal Menu': MenuMode,
+            '💬 Natural Language': NaturalLanguageMode,
+            '🚀 Quick Check': QuickCheckMode,
+            '❌ Exit': None
+        }
+    
+    def check_system(self) -> bool:
+        """Perform system checks."""
+        self.ui.display_section("SYSTEM CHECK", "🔍")
+        
+        # Check dependencies
+        if not DependencyManager.all_dependencies_met():
+            self.ui.display_message("Missing required dependencies", "error")
+            deps = DependencyManager.check_dependencies()
+            missing = [m for m, available in deps['required'].items() if not available]
+            print(f"\nInstall with: pip install {' '.join(missing)}")
+            return False
+        
+        self.ui.display_message("All dependencies available", "success")
+        
+        # Check functions
+        if not DependencyManager.all_functions_available(self.REQUIRED_FUNCTIONS):
+            self.ui.display_message("Missing required functions", "error")
+            print("\nPlease run all previous cells before starting the application.")
+            return False
+        
+        self.ui.display_message("All functions available", "success")
+        return True
+    
+    def run(self):
+        """Main application loop."""
+        self.ui.display_banner(
+            "🌤️ WEATHER DASHBOARD APPLICATION ⛅",
+            f"Version 1.0.0 • {datetime.now().strftime('%B %d, %Y')}"
+        )
+        
+        if not self.check_system():
+            self.ui.display_message("System check failed. Cannot start application.", "error")
+            return
+        
+        self.ui.display_message("System ready!", "success")
+        self.running = True
+        
+        while self.running:
+            mode_choice = self.ui.get_choice(
+                "Select interface mode:",
+                list(self.modes.keys())
+            )
+            
+            if mode_choice == '❌ Exit':
+                self.running = False
+                self.ui.display_banner("👋 Thank you for using Weather Dashboard!")
+                break
+            
+            # Get mode class and instantiate
+            mode_class = self.modes.get(mode_choice)
+            if mode_class:
+                mode = mode_class(self.ui)
+                mode.run()
+            
+            if self.running:
+                if not self.ui.confirm("\n↩️ Return to main menu?", default=True):
+                    self.running = False
+                    self.ui.display_message("Goodbye!", "success")
+
+
+
+
+# ============================================
+# FUNCTION REGISTRATION HELPER
+# ============================================
+
+
+def register_weather_functions():
+    """
+    Register all weather functions in the dependency manager.
+    Call this after defining your functions.
+    """
+    function_map = {
+        'get_weather_data_openweather': 'get_weather_data_openweather',
+        'display_weather_for_city': 'display_weather_for_city',
+        'create_weather_dashboard': 'create_weather_dashboard',
+        'validate_city_input': 'validate_city_input',
+        'parse_weather_question': 'parse_weather_question',
+        'generate_weather_response': 'generate_weather_response',
+        'process_weather_to_dataframe': 'process_weather_to_dataframe',
+        'visualize_weather_data': 'visualize_weather_data',
+        'weather_menu_pyinputplus': 'weather_menu_pyinputplus',
+        'weather_menu_ipywidgets': 'weather_menu_ipywidgets'
+    }
+    
+    # Try to get functions from globals
+    for func_name, global_name in function_map.items():
+        if global_name in globals():
+            DependencyManager.register_function(func_name, globals()[global_name])
+        else:
+            logger.debug(f"Function {func_name} not found in globals")
+
+
+
+
+# ============================================
+# ENTRY POINT
+# ============================================
+
+
+def start_weather_dashboard():
+    """Main entry point."""
+    print("🚀 Initializing Weather Dashboard...\n")
+    
+    # Register functions
+    register_weather_functions()
+    
+    # Start application
+    app = WeatherDashboardApp()
+    app.run()
+
+
+
+
+# Auto-start when run directly
+if __name__ == "__main__":
+    start_weather_dashboard()
+
+
+
+
+# ============================================
+# USAGE DOCUMENTATION
+# ============================================
+
+
+"""
+REFACTORED ARCHITECTURE BENEFITS:
+=================================
+
+
+1. FUNCTION REGISTRY SYSTEM
+   - No longer relies on globals() for validation
+   - Explicit function registration via DependencyManager
+   - Works in any environment (Jupyter, modules, imports)
+
+
+2. MODULAR ERROR HANDLING
+   - @handle_errors decorator for consistent error handling
+   - No duplicated try/except blocks
+   - Centralized error logging
+
+
+3. SEPARATION OF CONCERNS
+   - UserInterface: All UI interactions
+   - WeatherService: All business logic
+   - ApplicationMode: Mode implementations
+   - WeatherDashboardApp: Orchestration
+
+
+4. EFFICIENT DEPENDENCY CHECKING
+   - One-time check at startup
+   - Structured feedback via logging
+   - Clear error messages
+
+
+5. DECOUPLED UI AND LOGIC
+   - Easy to add new interfaces (GUI, API, CLI)
+   - Business logic is reusable
+   - Testing is simpler
+
+
+USAGE:
+======
+
+
+# Method 1: Auto-start (run this cell)
+# The application starts automatically
+
+
+# Method 2: Manual start
+start_weather_dashboard()
+
+
+# Method 3: Register external functions
+from my_module import get_weather_data_openweather
+DependencyManager.register_function('get_weather_data_openweather', get_weather_data_openweather)
+start_weather_dashboard()
+
+
+EXTENDING THE APPLICATION:
+=========================
+
+
+# Add a new mode:
+class MyCustomMode(ApplicationMode):
+    def run(self):
+        self.ui.display_banner("My Custom Mode")
+        # Your logic here
+
+
+# Register it:
+app.modes['🎨 Custom Mode'] = MyCustomMode
+"""
+2nd follow-up prompt for improvement after testing: Do not let this cell run on its own. It'd create a lot of errors when running the program
+
+
+2nd improved code:
+
+
+"""
+WEATHER DASHBOARD - MAIN APPLICATION
+====================================
+Refactored version with improved architecture, modularity, and maintainability.
+"""
+
+
+import sys
+import logging
+from datetime import datetime
+from typing import Callable, Dict, Optional, List
+from functools import wraps
+
+
+# ============================================
+# LOGGING CONFIGURATION
+# ============================================
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================
+# DEPENDENCY & FUNCTION REGISTRY
+# ============================================
+
+
+class DependencyManager:
+    """Centralized dependency and function validation."""
+    
+    REQUIRED_MODULES = {
+        'requests': 'API calls',
+        'pandas': 'Data processing',
+        'matplotlib': 'Visualizations',
+    }
+    
+    OPTIONAL_MODULES = {
+        'pyinputplus': 'Terminal menu',
+        'ipywidgets': 'Jupyter widgets'
+    }
+    
+    # Registry of required functions (set by external code)
+    function_registry: Dict[str, Callable] = {}
+    
+    @classmethod
+    def register_function(cls, name: str, func: Callable):
+        """Register a function in the global registry."""
+        cls.function_registry[name] = func
+    
+    @classmethod
+    def get_function(cls, name: str) -> Optional[Callable]:
+        """Retrieve a registered function."""
+        return cls.function_registry.get(name)
+    
+    @classmethod
+    def check_dependencies(cls) -> Dict[str, bool]:
+        """Check all required dependencies."""
+        results = {'required': {}, 'optional': {}}
+        
+        for module, purpose in cls.REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+                results['required'][module] = True
+            except ImportError:
+                results['required'][module] = False
+                logger.warning(f"Missing required module: {module} ({purpose})")
+        
+        for module, purpose in cls.OPTIONAL_MODULES.items():
+            try:
+                __import__(module)
+                results['optional'][module] = True
+            except ImportError:
+                results['optional'][module] = False
+                logger.info(f"Optional module not available: {module} ({purpose})")
+        
+        return results
+    
+    @classmethod
+    def check_functions(cls, required_functions: List[str]) -> Dict[str, bool]:
+        """Check if required functions are registered."""
+        results = {}
+        for func_name in required_functions:
+            results[func_name] = func_name in cls.function_registry
+            if not results[func_name]:
+                logger.warning(f"Missing required function: {func_name}")
+        return results
+    
+    @classmethod
+    def all_dependencies_met(cls) -> bool:
+        """Check if all required dependencies are available."""
+        deps = cls.check_dependencies()
+        return all(deps['required'].values())
+    
+    @classmethod
+    def all_functions_available(cls, required_functions: List[str]) -> bool:
+        """Check if all required functions are available."""
+        funcs = cls.check_functions(required_functions)
+        return all(funcs.values())
+
+
+
+
+# ============================================
+# ERROR HANDLING DECORATORS
+# ============================================
+
+
+def handle_errors(default_return=None):
+    """Unified error handler decorator."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                logger.info("\nOperation cancelled by user")
+                return default_return
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default_return
+        return wrapper
+    return decorator
+
+
+
+
+# ============================================
+# UI ABSTRACTION LAYER
+# ============================================
+
+
+class UserInterface:
+    """Abstract interface for user interaction - decouples UI from logic."""
+    
+    @staticmethod
+    def display_banner(title: str, subtitle: str = ""):
+        """Display a formatted banner."""
+        print("\n" + "="*70)
+        print(f"{title:^70}")
+        if subtitle:
+            print(f"{subtitle:^70}")
+        print("="*70 + "\n")
+    
+    @staticmethod
+    def display_section(title: str, icon: str = ""):
+        """Display a section header."""
+        print(f"\n{icon} {title}")
+        print("-"*70)
+    
+    @staticmethod
+    def display_message(message: str, msg_type: str = "info"):
+        """Display a formatted message."""
+        icons = {
+            'success': '✓',
+            'error': '❌',
+            'warning': '⚠️',
+            'info': 'ℹ️',
+            'question': '❓'
+        }
+        icon = icons.get(msg_type, '')
+        print(f"{icon} {message}")
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        """Get user input with prompt."""
+        try:
+            value = input(f"{prompt}: ").strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return ""
+    
+    @staticmethod
+    def get_choice(prompt: str, options: List[str]) -> str:
+        """Get user choice from options."""
+        print(f"\n{prompt}\n")
+        for i, option in enumerate(options, 1):
+            print(f"{i}. {option}")
+        
+        while True:
+            choice = UserInterface.get_input("\nEnter your choice")
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                return options[int(choice) - 1]
+            UserInterface.display_message("Invalid choice. Please try again.", "error")
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = True) -> bool:
+        """Get yes/no confirmation."""
+        default_str = "Y/n" if default else "y/N"
+        response = UserInterface.get_input(f"{prompt} ({default_str})")
+        
+        if not response:
+            return default
+        return response.lower() in ['y', 'yes']
+
+
+
+
+# ============================================
+# BUSINESS LOGIC LAYER
+# ============================================
+
+
+class WeatherService:
+    """Service layer for weather operations - separates logic from UI."""
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def fetch_weather(city: str) -> Optional[Dict]:
+        """Fetch weather data for a city."""
+        get_weather = DependencyManager.get_function('get_weather_data_openweather')
+        if not get_weather:
+            logger.error("Weather fetch function not available")
+            return None
+        return get_weather(city)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def parse_question(question: str, use_ollama: bool = False) -> Optional[Dict]:
+        """Parse a natural language question."""
+        parse_func = DependencyManager.get_function('parse_weather_question')
+        if not parse_func:
+            logger.error("Question parser not available")
+            return None
+        return parse_func(question, use_ollama=use_ollama)
+    
+    @staticmethod
+    @handle_errors(default_return="")
+    def generate_response(parsed: Dict, weather_data: Dict) -> str:
+        """Generate response from parsed question and weather data."""
+        response_func = DependencyManager.get_function('generate_weather_response')
+        if not response_func:
+            logger.error("Response generator not available")
+            return ""
+        return response_func(parsed, weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def display_weather(weather_data: Dict):
+        """Display weather data."""
+        display_func = DependencyManager.get_function('display_weather_for_city')
+        if display_func:
+            display_func(weather_data)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def process_to_dataframe(weather_data: Dict):
+        """Process weather data to DataFrame."""
+        process_func = DependencyManager.get_function('process_weather_to_dataframe')
+        if not process_func:
+            return None
+        return process_func(weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def visualize(df, city: str):
+        """Create visualizations."""
+        viz_func = DependencyManager.get_function('visualize_weather_data')
+        if viz_func and df is not None:
+            viz_func(df, city)
+
+
+
+
+# ============================================
+# APPLICATION MODES
+# ============================================
+
+
+class ApplicationMode:
+    """Base class for application modes."""
+    
+    def __init__(self, ui: UserInterface):
+        self.ui = ui
+        self.service = WeatherService()
+    
+    def run(self):
+        """Execute the mode. Override in subclasses."""
+        raise NotImplementedError
+
+
+
+
+class NaturalLanguageMode(ApplicationMode):
+    """Natural language question mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("💬 NATURAL LANGUAGE MODE")
+            self.ui.display_message("Ask questions in plain English. Type 'menu' to return to main menu.", "info")
+            
+            examples = [
+                "What's the temperature in London?",
+                "Will it rain tomorrow in Paris?",
+                "How windy is it in Tokyo?"
+            ]
+            print("\nExamples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print()
+            
+            question = self.ui.get_input("\n❓ Your question")
+            
+            if question.lower() in ['exit', 'quit', 'back', 'menu']:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            if not question:
+                continue
+            
+            use_ai = self.ui.confirm("🤖 Use AI (Ollama)?", default=False)
+            
+            # Parse and process
+            parsed = self.service.parse_question(question, use_ai)
+            
+            if not parsed or not parsed.get('success'):
+                error = parsed.get('error', 'Unknown error') if parsed else 'Parsing failed'
+                self.ui.display_message(error, "error")
+            else:
+                self.ui.display_message(f"Understood: {parsed['query_type']} for {parsed['city']}", "success")
+                
+                # Fetch weather
+                weather_data = self.service.fetch_weather(parsed['city'])
+                
+                if weather_data:
+                    # Generate and display response
+                    response = self.service.generate_response(parsed, weather_data)
+                    self.ui.display_section("🤖 ANSWER", "")
+                    print(response)
+                    print("="*70)
+                else:
+                    self.ui.display_message(f"Could not fetch weather for {parsed['city']}", "error")
+            
+            # Ask if user wants to continue in this mode or return to menu
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["❓ Ask another question", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class QuickCheckMode(ApplicationMode):
+    """Quick weather check mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("🚀 QUICK WEATHER CHECK")
+            
+            city = self.ui.get_input("📍 Enter city name (or 'menu' to return)")
+            
+            if not city or city.lower() in ['exit', 'quit', 'menu', 'back']:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            self.ui.display_message(f"Fetching weather for {city}...", "info")
+            
+            weather_data = self.service.fetch_weather(city)
+            
+            if not weather_data:
+                self.ui.display_message(f"Could not fetch weather for {city}", "error")
+            else:
+                self.service.display_weather(weather_data)
+                
+                if self.ui.confirm("\n📊 Show visualizations?", default=False):
+                    df = self.service.process_to_dataframe(weather_data)
+                    if df is not None:
+                        print("\n📊 Weather Data Table:")
+                        print("="*70)
+                        print(df.to_string(index=False))
+                        print("\n🎨 Generating visualizations...")
+                        self.service.visualize(df, city)
+                
+                self.ui.display_message("Quick check complete!", "success")
+            
+            # Ask what to do next
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["🔍 Check another city", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class MenuMode(ApplicationMode):
+    """Terminal or Jupyter menu mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_message("Starting menu mode...", "info")
+        
+        # Try terminal menu first
+        menu_func = DependencyManager.get_function('weather_menu_pyinputplus')
+        if menu_func:
+            menu_func()
+            return
+        
+        # Try Jupyter menu
+        menu_func = DependencyManager.get_function('weather_menu_ipywidgets')
+        if menu_func:
+            menu_func()
+            return
+        
+        self.ui.display_message("No menu interface available", "error")
+
+
+
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
+
+
+class WeatherDashboardApp:
+    """Main application orchestrator."""
+    
+    REQUIRED_FUNCTIONS = [
+        'get_weather_data_openweather',
+        'parse_weather_question',
+        'generate_weather_response',
+        'display_weather_for_city',
+        'process_weather_to_dataframe',
+        'visualize_weather_data'
+    ]
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.running = False
+        self.modes = {
+            '🖥️ Terminal Menu': MenuMode,
+            '💬 Natural Language': NaturalLanguageMode,
+            '🚀 Quick Check': QuickCheckMode,
+            '❌ Exit': None
+        }
+    
+    def check_system(self) -> bool:
+        """Perform system checks."""
+        self.ui.display_section("SYSTEM CHECK", "🔍")
+        
+        # Check dependencies
+        if not DependencyManager.all_dependencies_met():
+            self.ui.display_message("Missing required dependencies", "error")
+            deps = DependencyManager.check_dependencies()
+            missing = [m for m, available in deps['required'].items() if not available]
+            print(f"\nInstall with: pip install {' '.join(missing)}")
+            return False
+        
+        self.ui.display_message("All dependencies available", "success")
+        
+        # Check functions
+        if not DependencyManager.all_functions_available(self.REQUIRED_FUNCTIONS):
+            self.ui.display_message("Missing required functions", "error")
+            print("\nPlease run all previous cells before starting the application.")
+            return False
+        
+        self.ui.display_message("All functions available", "success")
+        return True
+    
+    def run(self):
+        """Main application loop."""
+        self.ui.display_banner(
+            "🌤️ WEATHER DASHBOARD APPLICATION ⛅",
+            f"Version 1.0.0 • {datetime.now().strftime('%B %d, %Y')}"
+        )
+        
+        if not self.check_system():
+            self.ui.display_message("System check failed. Cannot start application.", "error")
+            return
+        
+        self.ui.display_message("System ready!", "success")
+        self.running = True
+        
+        while self.running:
+            print("\n")
+            mode_choice = self.ui.get_choice(
+                "Select interface mode:",
+                list(self.modes.keys())
+            )
+            
+            if mode_choice == '❌ Exit':
+                self.running = False
+                self.ui.display_banner("👋 Thank you for using Weather Dashboard!")
+                break
+            
+            # Get mode class and instantiate
+            mode_class = self.modes.get(mode_choice)
+            if mode_class:
+                mode = mode_class(self.ui)
+                mode.run()
+                # After mode completes, automatically return to main menu
+                self.ui.display_message("Returned to main menu.", "success")
+            else:
+                self.ui.display_message("Mode not available.", "error")
+
+
+
+
+# ============================================
+# FUNCTION REGISTRATION HELPER
+# ============================================
+
+
+def register_weather_functions():
+    """
+    Register all weather functions in the dependency manager.
+    Call this after defining your functions.
+    """
+    function_map = {
+        'get_weather_data_openweather': 'get_weather_data_openweather',
+        'display_weather_for_city': 'display_weather_for_city',
+        'create_weather_dashboard': 'create_weather_dashboard',
+        'validate_city_input': 'validate_city_input',
+        'parse_weather_question': 'parse_weather_question',
+        'generate_weather_response': 'generate_weather_response',
+        'process_weather_to_dataframe': 'process_weather_to_dataframe',
+        'visualize_weather_data': 'visualize_weather_data',
+        'weather_menu_pyinputplus': 'weather_menu_pyinputplus',
+        'weather_menu_ipywidgets': 'weather_menu_ipywidgets'
+    }
+    
+    # Try to get functions from globals
+    for func_name, global_name in function_map.items():
+        if global_name in globals():
+            DependencyManager.register_function(func_name, globals()[global_name])
+        else:
+            logger.debug(f"Function {func_name} not found in globals")
+
+
+
+
+# ============================================
+# ENTRY POINT
+# ============================================
+
+
+def start_weather_dashboard():
+    """Main entry point."""
+    print("🚀 Initializing Weather Dashboard...\n")
+    
+    # Register functions
+    register_weather_functions()
+    
+    # Start application
+    app = WeatherDashboardApp()
+    app.run()
+
+
+
+
+# ============================================
+# MANUAL START INSTRUCTIONS
+# ============================================
+
+
+"""
+⚠️  IMPORTANT: DO NOT AUTO-RUN THIS CELL!
+==========================================
+
+
+This cell defines the main application but does NOT run automatically.
+This prevents errors when the notebook is first loaded.
+
+
+TO START THE APPLICATION:
+=========================
+
+
+After running all previous cells, manually call:
+
+
+    start_weather_dashboard()
+
+
+Or create and run the app manually:
+
+
+    app = WeatherDashboardApp()
+    app.run()
+
+
+
+
+RECOMMENDED WORKFLOW:
+====================
+
+
+1. Run Cell 1: Weather API functions
+2. Run Cell 2: Visualization functions  
+3. Run Cell 3: NLP parsing functions
+4. Run Cell 4: Menu functions
+5. Run this cell (Cell 5): Main app definition
+6. In a NEW cell below, run: start_weather_dashboard()
+
+
+This ensures all dependencies are loaded before starting.
+"""
+
+
+# DO NOT UNCOMMENT - This will auto-start and may cause errors
+# if __name__ == "__main__":
+#     start_weather_dashboard()
+
+
+
+
+# ============================================
+# USAGE DOCUMENTATION
+# ============================================
+
+
+"""
+REFACTORED ARCHITECTURE BENEFITS:
+=================================
+
+
+1. FUNCTION REGISTRY SYSTEM
+   - No longer relies on globals() for validation
+   - Explicit function registration via DependencyManager
+   - Works in any environment (Jupyter, modules, imports)
+
+
+2. MODULAR ERROR HANDLING
+   - @handle_errors decorator for consistent error handling
+   - No duplicated try/except blocks
+   - Centralized error logging
+
+
+3. SEPARATION OF CONCERNS
+   - UserInterface: All UI interactions
+   - WeatherService: All business logic
+   - ApplicationMode: Mode implementations
+   - WeatherDashboardApp: Orchestration
+
+
+4. EFFICIENT DEPENDENCY CHECKING
+   - One-time check at startup
+   - Structured feedback via logging
+   - Clear error messages
+
+
+5. DECOUPLED UI AND LOGIC
+   - Easy to add new interfaces (GUI, API, CLI)
+   - Business logic is reusable
+   - Testing is simpler
+
+
+USAGE:
+======
+
+
+# Method 1: Auto-start (run this cell)
+# The application starts automatically
+
+
+# Method 2: Manual start
+start_weather_dashboard()
+
+
+# Method 3: Register external functions
+from my_module import get_weather_data_openweather
+DependencyManager.register_function('get_weather_data_openweather', get_weather_data_openweather)
+start_weather_dashboard()
+
+
+EXTENDING THE APPLICATION:
+=========================
+
+
+# Add a new mode:
+class MyCustomMode(ApplicationMode):
+    def run(self):
+        self.ui.display_banner("My Custom Mode")
+        # Your logic here
+
+
+# Register it:
+app.modes['🎨 Custom Mode'] = MyCustomMode
+"""
+
+
+3rd attempt follow-up improvement prompt after testing: I want you to rewrite this code, including all the previous feedbacks, but not create an architecture benefit or recommended usage at the end. Instead, create the code in the most user friendly way, so that the moment this cell is manually ran, the function to start the weather app is also called
+
+
+3rd improved code:
+"""
+WEATHER DASHBOARD - MAIN APPLICATION
+====================================
+Refactored version with improved architecture, modularity, and maintainability.
+Run this cell to start the Weather Dashboard application.
+"""
+
+
+import sys
+import logging
+from datetime import datetime
+from typing import Callable, Dict, Optional, List
+from functools import wraps
+
+
+# ============================================
+# LOGGING CONFIGURATION
+# ============================================
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================
+# DEPENDENCY & FUNCTION REGISTRY
+# ============================================
+
+
+class DependencyManager:
+    """Centralized dependency and function validation."""
+    
+    REQUIRED_MODULES = {
+        'requests': 'API calls',
+        'pandas': 'Data processing',
+        'matplotlib': 'Visualizations',
+    }
+    
+    OPTIONAL_MODULES = {
+        'pyinputplus': 'Terminal menu',
+        'ipywidgets': 'Jupyter widgets'
+    }
+    
+    # Registry of required functions (set by external code)
+    function_registry: Dict[str, Callable] = {}
+    
+    @classmethod
+    def register_function(cls, name: str, func: Callable):
+        """Register a function in the global registry."""
+        cls.function_registry[name] = func
+    
+    @classmethod
+    def get_function(cls, name: str) -> Optional[Callable]:
+        """Retrieve a registered function."""
+        return cls.function_registry.get(name)
+    
+    @classmethod
+    def check_dependencies(cls) -> Dict[str, bool]:
+        """Check all required dependencies."""
+        results = {'required': {}, 'optional': {}}
+        
+        for module, purpose in cls.REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+                results['required'][module] = True
+            except ImportError:
+                results['required'][module] = False
+                logger.warning(f"Missing required module: {module} ({purpose})")
+        
+        for module, purpose in cls.OPTIONAL_MODULES.items():
+            try:
+                __import__(module)
+                results['optional'][module] = True
+            except ImportError:
+                results['optional'][module] = False
+                logger.info(f"Optional module not available: {module} ({purpose})")
+        
+        return results
+    
+    @classmethod
+    def check_functions(cls, required_functions: List[str]) -> Dict[str, bool]:
+        """Check if required functions are registered."""
+        results = {}
+        for func_name in required_functions:
+            results[func_name] = func_name in cls.function_registry
+            if not results[func_name]:
+                logger.warning(f"Missing required function: {func_name}")
+        return results
+    
+    @classmethod
+    def all_dependencies_met(cls) -> bool:
+        """Check if all required dependencies are available."""
+        deps = cls.check_dependencies()
+        return all(deps['required'].values())
+    
+    @classmethod
+    def all_functions_available(cls, required_functions: List[str]) -> bool:
+        """Check if all required functions are available."""
+        funcs = cls.check_functions(required_functions)
+        return all(funcs.values())
+
+
+
+
+# ============================================
+# ERROR HANDLING DECORATORS
+# ============================================
+
+
+def handle_errors(default_return=None):
+    """Unified error handler decorator."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                logger.info("\nOperation cancelled by user")
+                return default_return
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default_return
+        return wrapper
+    return decorator
+
+
+
+
+# ============================================
+# UI ABSTRACTION LAYER
+# ============================================
+
+
+class UserInterface:
+    """Abstract interface for user interaction - decouples UI from logic."""
+    
+    @staticmethod
+    def display_banner(title: str, subtitle: str = ""):
+        """Display a formatted banner."""
+        print("\n" + "="*70)
+        print(f"{title:^70}")
+        if subtitle:
+            print(f"{subtitle:^70}")
+        print("="*70 + "\n")
+    
+    @staticmethod
+    def display_section(title: str, icon: str = ""):
+        """Display a section header."""
+        print(f"\n{icon} {title}")
+        print("-"*70)
+    
+    @staticmethod
+    def display_message(message: str, msg_type: str = "info"):
+        """Display a formatted message."""
+        icons = {
+            'success': '✓',
+            'error': '❌',
+            'warning': '⚠️',
+            'info': 'ℹ️',
+            'question': '❓'
+        }
+        icon = icons.get(msg_type, '')
+        print(f"{icon} {message}")
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        """Get user input with prompt."""
+        try:
+            value = input(f"{prompt}: ").strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return ""
+    
+    @staticmethod
+    def get_choice(prompt: str, options: List[str]) -> str:
+        """Get user choice from options."""
+        print(f"\n{prompt}\n")
+        for i, option in enumerate(options, 1):
+            print(f"{i}. {option}")
+        
+        while True:
+            choice = UserInterface.get_input("\nEnter your choice")
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                return options[int(choice) - 1]
+            UserInterface.display_message("Invalid choice. Please try again.", "error")
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = True) -> bool:
+        """Get yes/no confirmation."""
+        default_str = "Y/n" if default else "y/N"
+        response = UserInterface.get_input(f"{prompt} ({default_str})")
+        
+        if not response:
+            return default
+        return response.lower() in ['y', 'yes']
+
+
+
+
+# ============================================
+# BUSINESS LOGIC LAYER
+# ============================================
+
+
+class WeatherService:
+    """Service layer for weather operations - separates logic from UI."""
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def fetch_weather(city: str) -> Optional[Dict]:
+        """Fetch weather data for a city."""
+        get_weather = DependencyManager.get_function('get_weather_data_openweather')
+        if not get_weather:
+            logger.error("Weather fetch function not available")
+            return None
+        return get_weather(city)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def parse_question(question: str, use_ollama: bool = False) -> Optional[Dict]:
+        """Parse a natural language question."""
+        parse_func = DependencyManager.get_function('parse_weather_question')
+        if not parse_func:
+            logger.error("Question parser not available")
+            return None
+        return parse_func(question, use_ollama=use_ollama)
+    
+    @staticmethod
+    @handle_errors(default_return="")
+    def generate_response(parsed: Dict, weather_data: Dict) -> str:
+        """Generate response from parsed question and weather data."""
+        response_func = DependencyManager.get_function('generate_weather_response')
+        if not response_func:
+            logger.error("Response generator not available")
+            return ""
+        return response_func(parsed, weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def display_weather(weather_data: Dict):
+        """Display weather data."""
+        display_func = DependencyManager.get_function('display_weather_for_city')
+        if display_func:
+            display_func(weather_data)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def process_to_dataframe(weather_data: Dict):
+        """Process weather data to DataFrame."""
+        process_func = DependencyManager.get_function('process_weather_to_dataframe')
+        if not process_func:
+            return None
+        return process_func(weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def visualize(df, city: str):
+        """Create visualizations."""
+        viz_func = DependencyManager.get_function('visualize_weather_data')
+        if viz_func and df is not None:
+            viz_func(df, city)
+
+
+
+
+# ============================================
+# APPLICATION MODES
+# ============================================
+
+
+class ApplicationMode:
+    """Base class for application modes."""
+    
+    def __init__(self, ui: UserInterface):
+        self.ui = ui
+        self.service = WeatherService()
+    
+    def run(self):
+        """Execute the mode. Override in subclasses."""
+        raise NotImplementedError
+
+
+
+
+class NaturalLanguageMode(ApplicationMode):
+    """Natural language question mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("💬 NATURAL LANGUAGE MODE")
+            self.ui.display_message("Ask questions in plain English. Type 'menu' to return to main menu.", "info")
+            
+            examples = [
+                "What's the temperature in London?",
+                "Will it rain tomorrow in Paris?",
+                "How windy is it in Tokyo?"
+            ]
+            print("\nExamples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print()
+            
+            question = self.ui.get_input("\n❓ Your question")
+            
+            if question.lower() in ['exit', 'quit', 'back', 'menu']:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            if not question:
+                continue
+            
+            use_ai = self.ui.confirm("🤖 Use AI (Ollama)?", default=False)
+            
+            # Parse and process
+            parsed = self.service.parse_question(question, use_ai)
+            
+            if not parsed or not parsed.get('success'):
+                error = parsed.get('error', 'Unknown error') if parsed else 'Parsing failed'
+                self.ui.display_message(error, "error")
+            else:
+                self.ui.display_message(f"Understood: {parsed['query_type']} for {parsed['city']}", "success")
+                
+                # Fetch weather
+                weather_data = self.service.fetch_weather(parsed['city'])
+                
+                if weather_data:
+                    # Generate and display response
+                    response = self.service.generate_response(parsed, weather_data)
+                    self.ui.display_section("🤖 ANSWER", "")
+                    print(response)
+                    print("="*70)
+                else:
+                    self.ui.display_message(f"Could not fetch weather for {parsed['city']}", "error")
+            
+            # Ask if user wants to continue in this mode or return to menu
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["❓ Ask another question", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class QuickCheckMode(ApplicationMode):
+    """Quick weather check mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("🚀 QUICK WEATHER CHECK")
+            
+            city = self.ui.get_input("📍 Enter city name (or 'menu' to return)")
+            
+            if not city or city.lower() in ['exit', 'quit', 'menu', 'back']:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            self.ui.display_message(f"Fetching weather for {city}...", "info")
+            
+            weather_data = self.service.fetch_weather(city)
+            
+            if not weather_data:
+                self.ui.display_message(f"Could not fetch weather for {city}", "error")
+            else:
+                self.service.display_weather(weather_data)
+                
+                if self.ui.confirm("\n📊 Show visualizations?", default=False):
+                    df = self.service.process_to_dataframe(weather_data)
+                    if df is not None:
+                        print("\n📊 Weather Data Table:")
+                        print("="*70)
+                        print(df.to_string(index=False))
+                        print("\n🎨 Generating visualizations...")
+                        self.service.visualize(df, city)
+                
+                self.ui.display_message("Quick check complete!", "success")
+            
+            # Ask what to do next
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["🔍 Check another city", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class MenuMode(ApplicationMode):
+    """Terminal or Jupyter menu mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_message("Starting menu mode...", "info")
+        
+        # Try terminal menu first
+        menu_func = DependencyManager.get_function('weather_menu_pyinputplus')
+        if menu_func:
+            menu_func()
+            return
+        
+        # Try Jupyter menu
+        menu_func = DependencyManager.get_function('weather_menu_ipywidgets')
+        if menu_func:
+            menu_func()
+            return
+        
+        self.ui.display_message("No menu interface available", "error")
+
+
+
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
+
+
+class WeatherDashboardApp:
+    """Main application orchestrator."""
+    
+    REQUIRED_FUNCTIONS = [
+        'get_weather_data_openweather',
+        'parse_weather_question',
+        'generate_weather_response',
+        'display_weather_for_city',
+        'process_weather_to_dataframe',
+        'visualize_weather_data'
+    ]
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.running = False
+        self.modes = {
+            '🖥️  Terminal Menu': MenuMode,
+            '💬 Natural Language': NaturalLanguageMode,
+            '🚀 Quick Check': QuickCheckMode,
+            '❌ Exit': None
+        }
+    
+    def check_system(self) -> bool:
+        """Perform system checks."""
+        self.ui.display_section("SYSTEM CHECK", "🔍")
+        
+        # Check dependencies
+        if not DependencyManager.all_dependencies_met():
+            self.ui.display_message("Missing required dependencies", "error")
+            deps = DependencyManager.check_dependencies()
+            missing = [m for m, available in deps['required'].items() if not available]
+            print(f"\nInstall with: pip install {' '.join(missing)}")
+            return False
+        
+        self.ui.display_message("All dependencies available", "success")
+        
+        # Check functions
+        if not DependencyManager.all_functions_available(self.REQUIRED_FUNCTIONS):
+            self.ui.display_message("Missing required functions", "error")
+            print("\nPlease run all previous cells before starting the application.")
+            return False
+        
+        self.ui.display_message("All functions available", "success")
+        return True
+    
+    def run(self):
+        """Main application loop."""
+        self.ui.display_banner(
+            "🌤️  WEATHER DASHBOARD APPLICATION  ⛅",
+            f"Version 1.0.0 • {datetime.now().strftime('%B %d, %Y')}"
+        )
+        
+        if not self.check_system():
+            self.ui.display_message("System check failed. Cannot start application.", "error")
+            return
+        
+        self.ui.display_message("System ready!", "success")
+        self.running = True
+        
+        while self.running:
+            print("\n")
+            mode_choice = self.ui.get_choice(
+                "Select interface mode:",
+                list(self.modes.keys())
+            )
+            
+            if mode_choice == '❌ Exit':
+                self.running = False
+                self.ui.display_banner("👋 Thank you for using Weather Dashboard!")
+                break
+            
+            # Get mode class and instantiate
+            mode_class = self.modes.get(mode_choice)
+            if mode_class:
+                mode = mode_class(self.ui)
+                mode.run()
+                # After mode completes, automatically return to main menu
+                self.ui.display_message("Returned to main menu.", "success")
+            else:
+                self.ui.display_message("Mode not available.", "error")
+
+
+
+
+# ============================================
+# FUNCTION REGISTRATION
+# ============================================
+
+
+def register_weather_functions():
+    """Register all weather functions in the dependency manager."""
+    function_map = {
+        'get_weather_data_openweather': 'get_weather_data_openweather',
+        'display_weather_for_city': 'display_weather_for_city',
+        'create_weather_dashboard': 'create_weather_dashboard',
+        'validate_city_input': 'validate_city_input',
+        'parse_weather_question': 'parse_weather_question',
+        'generate_weather_response': 'generate_weather_response',
+        'process_weather_to_dataframe': 'process_weather_to_dataframe',
+        'visualize_weather_data': 'visualize_weather_data',
+        'weather_menu_pyinputplus': 'weather_menu_pyinputplus',
+        'weather_menu_ipywidgets': 'weather_menu_ipywidgets'
+    }
+    
+    # Try to get functions from globals
+    for func_name, global_name in function_map.items():
+        if global_name in globals():
+            DependencyManager.register_function(func_name, globals()[global_name])
+
+
+
+
+# ============================================
+# START APPLICATION
+# ============================================
+
+
+print("🚀 Initializing Weather Dashboard Application...\n")
+register_weather_functions()
+
+
+app = WeatherDashboardApp()
+app.run()
+
+
+4th attempt follow-up prompt to improve code after testing:
+This function lacks city check. For example, if user does not enter the city names follows by comma, the system cannot fetch the comparison for weather data. Instead, create a function that checks these syntax requirement and ask users to re-enter according to the syntax rule. Do this for all functions necessary
+
+
+4th improved code:
+"""
+WEATHER DASHBOARD - MAIN APPLICATION
+====================================
+Refactored version with improved architecture, modularity, and maintainability.
+Run this cell to start the Weather Dashboard application.
+"""
+
+
+import sys
+import logging
+from datetime import datetime
+from typing import Callable, Dict, Optional, List
+from functools import wraps
+
+
+# ============================================
+# LOGGING CONFIGURATION
+# ============================================
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================
+# DEPENDENCY & FUNCTION REGISTRY
+# ============================================
+
+
+class DependencyManager:
+    """Centralized dependency and function validation."""
+    
+    REQUIRED_MODULES = {
+        'requests': 'API calls',
+        'pandas': 'Data processing',
+        'matplotlib': 'Visualizations',
+    }
+    
+    OPTIONAL_MODULES = {
+        'pyinputplus': 'Terminal menu',
+        'ipywidgets': 'Jupyter widgets'
+    }
+    
+    # Registry of required functions (set by external code)
+    function_registry: Dict[str, Callable] = {}
+    
+    @classmethod
+    def register_function(cls, name: str, func: Callable):
+        """Register a function in the global registry."""
+        cls.function_registry[name] = func
+    
+    @classmethod
+    def get_function(cls, name: str) -> Optional[Callable]:
+        """Retrieve a registered function."""
+        return cls.function_registry.get(name)
+    
+    @classmethod
+    def check_dependencies(cls) -> Dict[str, bool]:
+        """Check all required dependencies."""
+        results = {'required': {}, 'optional': {}}
+        
+        for module, purpose in cls.REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+                results['required'][module] = True
+            except ImportError:
+                results['required'][module] = False
+                logger.warning(f"Missing required module: {module} ({purpose})")
+        
+        for module, purpose in cls.OPTIONAL_MODULES.items():
+            try:
+                __import__(module)
+                results['optional'][module] = True
+            except ImportError:
+                results['optional'][module] = False
+                logger.info(f"Optional module not available: {module} ({purpose})")
+        
+        return results
+    
+    @classmethod
+    def check_functions(cls, required_functions: List[str]) -> Dict[str, bool]:
+        """Check if required functions are registered."""
+        results = {}
+        for func_name in required_functions:
+            results[func_name] = func_name in cls.function_registry
+            if not results[func_name]:
+                logger.warning(f"Missing required function: {func_name}")
+        return results
+    
+    @classmethod
+    def all_dependencies_met(cls) -> bool:
+        """Check if all required dependencies are available."""
+        deps = cls.check_dependencies()
+        return all(deps['required'].values())
+    
+    @classmethod
+    def all_functions_available(cls, required_functions: List[str]) -> bool:
+        """Check if all required functions are available."""
+        funcs = cls.check_functions(required_functions)
+        return all(funcs.values())
+
+
+
+
+# ============================================
+# ERROR HANDLING DECORATORS
+# ============================================
+
+
+def handle_errors(default_return=None):
+    """Unified error handler decorator."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                logger.info("\nOperation cancelled by user")
+                return default_return
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default_return
+        return wrapper
+    return decorator
+
+
+
+
+# ============================================
+# INPUT VALIDATION LAYER
+# ============================================
+
+
+class InputValidator:
+    """Centralized input validation for all user inputs."""
+    
+    @staticmethod
+    def validate_city_name(city: str) -> tuple[bool, str]:
+        """
+        Validate a single city name.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not city or not city.strip():
+            return False, "City name cannot be empty"
+        
+        city = city.strip()
+        
+        # Check minimum length
+        if len(city) < 2:
+            return False, "City name must be at least 2 characters long"
+        
+        # Check if only numbers
+        if city.replace(" ", "").isdigit():
+            return False, "City name cannot contain only numbers"
+        
+        # Check for special characters (except spaces and hyphens)
+        invalid_chars = "!@#$%^&*()_+={}[]|\\:;\"'<>?/,."
+        if any(char in city for char in invalid_chars):
+            return False, f"City name cannot contain special characters like {invalid_chars}"
+        
+        # Check if it starts with a capital letter (for proper city names)
+        if not city[0].isupper():
+            return False, "City name should start with a capital letter (e.g., 'London', 'New York')"
+        
+        return True, ""
+    
+    @staticmethod
+    def validate_city_list(cities_input: str) -> tuple[bool, str, list]:
+        """
+        Validate a comma-separated list of cities.
+        
+        Returns:
+            tuple: (is_valid, error_message, city_list)
+        """
+        if not cities_input or not cities_input.strip():
+            return False, "Please enter at least one city name", []
+        
+        # Split by comma
+        cities = [city.strip() for city in cities_input.split(',')]
+        
+        # Remove empty strings
+        cities = [city for city in cities if city]
+        
+        if not cities:
+            return False, "No valid cities found. Please separate cities with commas", []
+        
+        # Validate each city
+        validated_cities = []
+        errors = []
+        
+        for i, city in enumerate(cities, 1):
+            is_valid, error = InputValidator.validate_city_name(city)
+            if is_valid:
+                validated_cities.append(city)
+            else:
+                errors.append(f"City #{i} ('{city}'): {error}")
+        
+        if errors:
+            error_message = "Invalid city names found:\n  • " + "\n  • ".join(errors)
+            error_message += "\n\nFormat: City1, City2, City3 (e.g., 'London, Paris, Tokyo')"
+            return False, error_message, []
+        
+        if len(validated_cities) > 10:
+            return False, "Too many cities (max 10). Please reduce the number of cities", []
+        
+        return True, "", validated_cities
+    
+    @staticmethod
+    def validate_question(question: str) -> tuple[bool, str]:
+        """
+        Validate a natural language weather question.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not question or not question.strip():
+            return False, "Question cannot be empty"
+        
+        question = question.strip()
+        
+        if len(question) < 5:
+            return False, "Question is too short. Please ask a complete question"
+        
+        if len(question) > 500:
+            return False, "Question is too long. Please keep it under 500 characters"
+        
+        # Check if question contains at least some letters
+        if not any(c.isalpha() for c in question):
+            return False, "Question must contain letters"
+        
+        return True, ""
+    
+    @staticmethod
+    def get_validated_input(prompt: str, validator_func, max_attempts: int = 3) -> Optional[str]:
+        """
+        Get validated input from user with retry logic.
+        
+        Args:
+            prompt: Input prompt
+            validator_func: Function that validates input (returns tuple[bool, str])
+            max_attempts: Maximum number of retry attempts
+            
+        Returns:
+            Validated input or None if user gives up
+        """
+        attempts = 0
+        
+        while attempts < max_attempts:
+            user_input = input(f"{prompt}: ").strip()
+            
+            # Allow user to exit
+            if user_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                return None
+            
+            # Validate input
+            is_valid, error_message = validator_func(user_input)
+            
+            if is_valid:
+                return user_input
+            
+            # Show error and retry
+            attempts += 1
+            remaining = max_attempts - attempts
+            
+            print(f"\n❌ {error_message}")
+            
+            if remaining > 0:
+                print(f"⚠️  {remaining} attempt(s) remaining. Try again or type 'cancel' to go back.\n")
+            else:
+                print("❌ Maximum attempts reached. Returning to previous menu.\n")
+                return None
+        
+        return None
+
+
+class UserInterface:
+    """Abstract interface for user interaction - decouples UI from logic."""
+    
+    @staticmethod
+    def display_banner(title: str, subtitle: str = ""):
+        """Display a formatted banner."""
+        print("\n" + "="*70)
+        print(f"{title:^70}")
+        if subtitle:
+            print(f"{subtitle:^70}")
+        print("="*70 + "\n")
+    
+    @staticmethod
+    def display_section(title: str, icon: str = ""):
+        """Display a section header."""
+        print(f"\n{icon} {title}")
+        print("-"*70)
+    
+    @staticmethod
+    def display_message(message: str, msg_type: str = "info"):
+        """Display a formatted message."""
+        icons = {
+            'success': '✓',
+            'error': '❌',
+            'warning': '⚠️',
+            'info': 'ℹ️',
+            'question': '❓'
+        }
+        icon = icons.get(msg_type, '')
+        print(f"{icon} {message}")
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        """Get user input with prompt."""
+        try:
+            value = input(f"{prompt}: ").strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return ""
+    
+    @staticmethod
+    def get_choice(prompt: str, options: List[str]) -> str:
+        """Get user choice from options."""
+        print(f"\n{prompt}\n")
+        for i, option in enumerate(options, 1):
+            print(f"{i}. {option}")
+        
+        while True:
+            choice = UserInterface.get_input("\nEnter your choice")
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                return options[int(choice) - 1]
+            UserInterface.display_message("Invalid choice. Please try again.", "error")
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = True) -> bool:
+        """Get yes/no confirmation."""
+        default_str = "Y/n" if default else "y/N"
+        response = UserInterface.get_input(f"{prompt} ({default_str})")
+        
+        if not response:
+            return default
+        return response.lower() in ['y', 'yes']
+
+
+
+
+# ============================================
+# BUSINESS LOGIC LAYER
+# ============================================
+
+
+class WeatherService:
+    """Service layer for weather operations - separates logic from UI."""
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def fetch_weather(city: str) -> Optional[Dict]:
+        """Fetch weather data for a city."""
+        get_weather = DependencyManager.get_function('get_weather_data_openweather')
+        if not get_weather:
+            logger.error("Weather fetch function not available")
+            return None
+        return get_weather(city)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def parse_question(question: str, use_ollama: bool = False) -> Optional[Dict]:
+        """Parse a natural language question."""
+        parse_func = DependencyManager.get_function('parse_weather_question')
+        if not parse_func:
+            logger.error("Question parser not available")
+            return None
+        return parse_func(question, use_ollama=use_ollama)
+    
+    @staticmethod
+    @handle_errors(default_return="")
+    def generate_response(parsed: Dict, weather_data: Dict) -> str:
+        """Generate response from parsed question and weather data."""
+        response_func = DependencyManager.get_function('generate_weather_response')
+        if not response_func:
+            logger.error("Response generator not available")
+            return ""
+        return response_func(parsed, weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def display_weather(weather_data: Dict):
+        """Display weather data."""
+        display_func = DependencyManager.get_function('display_weather_for_city')
+        if display_func:
+            display_func(weather_data)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def process_to_dataframe(weather_data: Dict):
+        """Process weather data to DataFrame."""
+        process_func = DependencyManager.get_function('process_weather_to_dataframe')
+        if not process_func:
+            return None
+        return process_func(weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def visualize(df, city: str):
+        """Create visualizations."""
+        viz_func = DependencyManager.get_function('visualize_weather_data')
+        if viz_func and df is not None:
+            viz_func(df, city)
+
+
+
+
+# ============================================
+# APPLICATION MODES
+# ============================================
+
+
+class ApplicationMode:
+    """Base class for application modes."""
+    
+    def __init__(self, ui: UserInterface):
+        self.ui = ui
+        self.service = WeatherService()
+    
+    def run(self):
+        """Execute the mode. Override in subclasses."""
+        raise NotImplementedError
+
+
+
+
+class NaturalLanguageMode(ApplicationMode):
+    """Natural language question mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("💬 NATURAL LANGUAGE MODE")
+            self.ui.display_message("Ask questions in plain English. Type 'menu' to return to main menu.", "info")
+            
+            examples = [
+                "What's the temperature in London?",
+                "Will it rain tomorrow in Paris?",
+                "How windy is it in Tokyo?"
+            ]
+            print("\nExamples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print()
+            
+            question = self.ui.get_input("\n❓ Your question")
+            
+            if question.lower() in ['exit', 'quit', 'back', 'menu']:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            if not question:
+                continue
+            
+            use_ai = self.ui.confirm("🤖 Use AI (Ollama)?", default=False)
+            
+            # Parse and process
+            parsed = self.service.parse_question(question, use_ai)
+            
+            if not parsed or not parsed.get('success'):
+                error = parsed.get('error', 'Unknown error') if parsed else 'Parsing failed'
+                self.ui.display_message(error, "error")
+            else:
+                self.ui.display_message(f"Understood: {parsed['query_type']} for {parsed['city']}", "success")
+                
+                # Fetch weather
+                weather_data = self.service.fetch_weather(parsed['city'])
+                
+                if weather_data:
+                    # Generate and display response
+                    response = self.service.generate_response(parsed, weather_data)
+                    self.ui.display_section("🤖 ANSWER", "")
+                    print(response)
+                    print("="*70)
+                else:
+                    self.ui.display_message(f"Could not fetch weather for {parsed['city']}", "error")
+            
+            # Ask if user wants to continue in this mode or return to menu
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["❓ Ask another question", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class QuickCheckMode(ApplicationMode):
+    """Quick weather check mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("🚀 QUICK WEATHER CHECK")
+            
+            city = self.ui.get_input("📍 Enter city name (or 'menu' to return)")
+            
+            if not city or city.lower() in ['exit', 'quit', 'menu', 'back']:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            self.ui.display_message(f"Fetching weather for {city}...", "info")
+            
+            weather_data = self.service.fetch_weather(city)
+            
+            if not weather_data:
+                self.ui.display_message(f"Could not fetch weather for {city}", "error")
+            else:
+                self.service.display_weather(weather_data)
+                
+                if self.ui.confirm("\n📊 Show visualizations?", default=False):
+                    df = self.service.process_to_dataframe(weather_data)
+                    if df is not None:
+                        print("\n📊 Weather Data Table:")
+                        print("="*70)
+                        print(df.to_string(index=False))
+                        print("\n🎨 Generating visualizations...")
+                        self.service.visualize(df, city)
+                
+                self.ui.display_message("Quick check complete!", "success")
+            
+            # Ask what to do next
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["🔍 Check another city", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class MenuMode(ApplicationMode):
+    """Terminal or Jupyter menu mode."""
+    
+    @handle_errors()
+    def run(self):
+        self.ui.display_message("Starting menu mode...", "info")
+        
+        # Try terminal menu first
+        menu_func = DependencyManager.get_function('weather_menu_pyinputplus')
+        if menu_func:
+            menu_func()
+            return
+        
+        # Try Jupyter menu
+        menu_func = DependencyManager.get_function('weather_menu_ipywidgets')
+        if menu_func:
+            menu_func()
+            return
+        
+        self.ui.display_message("No menu interface available", "error")
+
+
+
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
+
+
+class WeatherDashboardApp:
+    """Main application orchestrator."""
+    
+    REQUIRED_FUNCTIONS = [
+        'get_weather_data_openweather',
+        'parse_weather_question',
+        'generate_weather_response',
+        'display_weather_for_city',
+        'process_weather_to_dataframe',
+        'visualize_weather_data'
+    ]
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.running = False
+        self.modes = {
+            '🖥️  Terminal Menu': MenuMode,
+            '💬 Natural Language': NaturalLanguageMode,
+            '🚀 Quick Check': QuickCheckMode,
+            '❌ Exit': None
+        }
+    
+    def check_system(self) -> bool:
+        """Perform system checks."""
+        self.ui.display_section("SYSTEM CHECK", "🔍")
+        
+        # Check dependencies
+        if not DependencyManager.all_dependencies_met():
+            self.ui.display_message("Missing required dependencies", "error")
+            deps = DependencyManager.check_dependencies()
+            missing = [m for m, available in deps['required'].items() if not available]
+            print(f"\nInstall with: pip install {' '.join(missing)}")
+            return False
+        
+        self.ui.display_message("All dependencies available", "success")
+        
+        # Check functions
+        if not DependencyManager.all_functions_available(self.REQUIRED_FUNCTIONS):
+            self.ui.display_message("Missing required functions", "error")
+            print("\nPlease run all previous cells before starting the application.")
+            return False
+        
+        self.ui.display_message("All functions available", "success")
+        return True
+    
+    def run(self):
+        """Main application loop."""
+        self.ui.display_banner(
+            "🌤️  WEATHER DASHBOARD APPLICATION  ⛅",
+            f"Version 1.0.0 • {datetime.now().strftime('%B %d, %Y')}"
+        )
+        
+        if not self.check_system():
+            self.ui.display_message("System check failed. Cannot start application.", "error")
+            return
+        
+        self.ui.display_message("System ready!", "success")
+        self.running = True
+        
+        while self.running:
+            print("\n")
+            mode_choice = self.ui.get_choice(
+                "Select interface mode:",
+                list(self.modes.keys())
+            )
+            
+            if mode_choice == '❌ Exit':
+                self.running = False
+                self.ui.display_banner("👋 Thank you for using Weather Dashboard!")
+                break
+            
+            # Get mode class and instantiate
+            mode_class = self.modes.get(mode_choice)
+            if mode_class:
+                mode = mode_class(self.ui)
+                mode.run()
+                # After mode completes, automatically return to main menu
+                self.ui.display_message("Returned to main menu.", "success")
+            else:
+                self.ui.display_message("Mode not available.", "error")
+
+
+
+
+# ============================================
+# FUNCTION REGISTRATION
+# ============================================
+
+
+def register_weather_functions():
+    """Register all weather functions in the dependency manager."""
+    function_map = {
+        'get_weather_data_openweather': 'get_weather_data_openweather',
+        'display_weather_for_city': 'display_weather_for_city',
+        'create_weather_dashboard': 'create_weather_dashboard',
+        'validate_city_input': 'validate_city_input',
+        'parse_weather_question': 'parse_weather_question',
+        'generate_weather_response': 'generate_weather_response',
+        'process_weather_to_dataframe': 'process_weather_to_dataframe',
+        'visualize_weather_data': 'visualize_weather_data',
+        'weather_menu_pyinputplus': 'weather_menu_pyinputplus',
+        'weather_menu_ipywidgets': 'weather_menu_ipywidgets'
+    }
+    
+    # Try to get functions from globals
+    for func_name, global_name in function_map.items():
+        if global_name in globals():
+            DependencyManager.register_function(func_name, globals()[global_name])
+
+
+
+
+# ============================================
+# START APPLICATION
+# ============================================
+
+
+print("🚀 Initializing Weather Dashboard Application...\n")
+register_weather_functions()
+
+
+app = WeatherDashboardApp()
+app.run()
+
+
+5th attempt follow-up prompt to improve code after testing:
+
+
+In this code, when user enter the city format incorrectly, it still does not let user try again. Instead of asking y/n or printing out "city name error", try making the user re-enter their input.
+
+
+5th attempt improved code:
+"""
+WEATHER DASHBOARD - MAIN APPLICATION
+====================================
+Refactored version with improved architecture, modularity, and maintainability.
+Run this cell to start the Weather Dashboard application.
+"""
+
+
+import sys
+import logging
+from datetime import datetime
+from typing import Callable, Dict, Optional, List
+from functools import wraps
+
+
+# ============================================
+# LOGGING CONFIGURATION
+# ============================================
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================
+# DEPENDENCY & FUNCTION REGISTRY
+# ============================================
+
+
+class DependencyManager:
+    """Centralized dependency and function validation."""
+    
+    REQUIRED_MODULES = {
+        'requests': 'API calls',
+        'pandas': 'Data processing',
+        'matplotlib': 'Visualizations',
+    }
+    
+    OPTIONAL_MODULES = {
+        'pyinputplus': 'Terminal menu',
+        'ipywidgets': 'Jupyter widgets'
+    }
+    
+    # Registry of required functions (set by external code)
+    function_registry: Dict[str, Callable] = {}
+    
+    @classmethod
+    def register_function(cls, name: str, func: Callable):
+        """Register a function in the global registry."""
+        cls.function_registry[name] = func
+    
+    @classmethod
+    def get_function(cls, name: str) -> Optional[Callable]:
+        """Retrieve a registered function."""
+        return cls.function_registry.get(name)
+    
+    @classmethod
+    def check_dependencies(cls) -> Dict[str, bool]:
+        """Check all required dependencies."""
+        results = {'required': {}, 'optional': {}}
+        
+        for module, purpose in cls.REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+                results['required'][module] = True
+            except ImportError:
+                results['required'][module] = False
+                logger.warning(f"Missing required module: {module} ({purpose})")
+        
+        for module, purpose in cls.OPTIONAL_MODULES.items():
+            try:
+                __import__(module)
+                results['optional'][module] = True
+            except ImportError:
+                results['optional'][module] = False
+                logger.info(f"Optional module not available: {module} ({purpose})")
+        
+        return results
+    
+    @classmethod
+    def check_functions(cls, required_functions: List[str]) -> Dict[str, bool]:
+        """Check if required functions are registered."""
+        results = {}
+        for func_name in required_functions:
+            results[func_name] = func_name in cls.function_registry
+            if not results[func_name]:
+                logger.warning(f"Missing required function: {func_name}")
+        return results
+    
+    @classmethod
+    def all_dependencies_met(cls) -> bool:
+        """Check if all required dependencies are available."""
+        deps = cls.check_dependencies()
+        return all(deps['required'].values())
+    
+    @classmethod
+    def all_functions_available(cls, required_functions: List[str]) -> bool:
+        """Check if all required functions are available."""
+        funcs = cls.check_functions(required_functions)
+        return all(funcs.values())
+
+
+
+
+# ============================================
+# ERROR HANDLING DECORATORS
+# ============================================
+
+
+def handle_errors(default_return=None):
+    """Unified error handler decorator."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                logger.info("\nOperation cancelled by user")
+                return default_return
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default_return
+        return wrapper
+    return decorator
+
+
+
+
+# ============================================
+# INPUT VALIDATION LAYER
+# ============================================
+
+
+class InputValidator:
+    """Centralized input validation for all user inputs."""
+    
+    @staticmethod
+    def validate_city_name(city: str) -> tuple[bool, str]:
+        """
+        Validate a single city name.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not city or not city.strip():
+            return False, "City name cannot be empty"
+        
+        city = city.strip()
+        
+        # Check minimum length
+        if len(city) < 2:
+            return False, "City name must be at least 2 characters long"
+        
+        # Check if only numbers
+        if city.replace(" ", "").isdigit():
+            return False, "City name cannot contain only numbers"
+        
+        # Check for special characters (except spaces and hyphens)
+        invalid_chars = "!@#$%^&*()_+={}[]|\\:;\"'<>?/,."
+        if any(char in city for char in invalid_chars):
+            return False, f"City name cannot contain special characters like {invalid_chars}"
+        
+        # Check if it starts with a capital letter (for proper city names)
+        if not city[0].isupper():
+            return False, "City name should start with a capital letter (e.g., 'London', 'New York')"
+        
+        return True, ""
+    
+    @staticmethod
+    def validate_city_list(cities_input: str) -> tuple[bool, str, list]:
+        """
+        Validate a comma-separated list of cities.
+        
+        Returns:
+            tuple: (is_valid, error_message, city_list)
+        """
+        if not cities_input or not cities_input.strip():
+            return False, "Please enter at least one city name", []
+        
+        # Split by comma
+        cities = [city.strip() for city in cities_input.split(',')]
+        
+        # Remove empty strings
+        cities = [city for city in cities if city]
+        
+        if not cities:
+            return False, "No valid cities found. Please separate cities with commas", []
+        
+        # Validate each city
+        validated_cities = []
+        errors = []
+        
+        for i, city in enumerate(cities, 1):
+            is_valid, error = InputValidator.validate_city_name(city)
+            if is_valid:
+                validated_cities.append(city)
+            else:
+                errors.append(f"City #{i} ('{city}'): {error}")
+        
+        if errors:
+            error_message = "Invalid city names found:\n  • " + "\n  • ".join(errors)
+            error_message += "\n\nFormat: City1, City2, City3 (e.g., 'London, Paris, Tokyo')"
+            return False, error_message, []
+        
+        if len(validated_cities) > 10:
+            return False, "Too many cities (max 10). Please reduce the number of cities", []
+        
+        return True, "", validated_cities
+    
+    @staticmethod
+    def validate_question(question: str) -> tuple[bool, str]:
+        """
+        Validate a natural language weather question.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not question or not question.strip():
+            return False, "Question cannot be empty"
+        
+        question = question.strip()
+        
+        if len(question) < 5:
+            return False, "Question is too short. Please ask a complete question"
+        
+        if len(question) > 500:
+            return False, "Question is too long. Please keep it under 500 characters"
+        
+        # Check if question contains at least some letters
+        if not any(c.isalpha() for c in question):
+            return False, "Question must contain letters"
+        
+        return True, ""
+    
+    @staticmethod
+    def get_validated_input(prompt: str, validator_func, max_attempts: int = 3) -> Optional[str]:
+        """
+        Get validated input from user with retry logic.
+        
+        Args:
+            prompt: Input prompt
+            validator_func: Function that validates input (returns tuple[bool, str])
+            max_attempts: Maximum number of retry attempts
+            
+        Returns:
+            Validated input or None if user gives up
+        """
+        attempts = 0
+        
+        while attempts < max_attempts:
+            user_input = input(f"{prompt}: ").strip()
+            
+            # Allow user to exit
+            if user_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                return None
+            
+            # Validate input
+            is_valid, error_message = validator_func(user_input)
+            
+            if is_valid:
+                return user_input
+            
+            # Show error and retry
+            attempts += 1
+            remaining = max_attempts - attempts
+            
+            print(f"\n❌ {error_message}")
+            
+            if remaining > 0:
+                print(f"⚠️  {remaining} attempt(s) remaining. Try again or type 'cancel' to go back.\n")
+            else:
+                print("❌ Maximum attempts reached. Returning to previous menu.\n")
+                return None
+        
+        return None
+
+
+class UserInterface:
+    """Abstract interface for user interaction - decouples UI from logic."""
+    
+    @staticmethod
+    def display_banner(title: str, subtitle: str = ""):
+        """Display a formatted banner."""
+        print("\n" + "="*70)
+        print(f"{title:^70}")
+        if subtitle:
+            print(f"{subtitle:^70}")
+        print("="*70 + "\n")
+    
+    @staticmethod
+    def display_section(title: str, icon: str = ""):
+        """Display a section header."""
+        print(f"\n{icon} {title}")
+        print("-"*70)
+    
+    @staticmethod
+    def display_message(message: str, msg_type: str = "info"):
+        """Display a formatted message."""
+        icons = {
+            'success': '✓',
+            'error': '❌',
+            'warning': '⚠️',
+            'info': 'ℹ️',
+            'question': '❓'
+        }
+        icon = icons.get(msg_type, '')
+        print(f"{icon} {message}")
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        """Get user input with prompt."""
+        try:
+            value = input(f"{prompt}: ").strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return ""
+    
+    @staticmethod
+    def get_choice(prompt: str, options: List[str]) -> str:
+        """Get user choice from options."""
+        print(f"\n{prompt}\n")
+        for i, option in enumerate(options, 1):
+            print(f"{i}. {option}")
+        
+        while True:
+            choice = UserInterface.get_input("\nEnter your choice")
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                return options[int(choice) - 1]
+            UserInterface.display_message("Invalid choice. Please try again.", "error")
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = True) -> bool:
+        """Get yes/no confirmation."""
+        default_str = "Y/n" if default else "y/N"
+        response = UserInterface.get_input(f"{prompt} ({default_str})")
+        
+        if not response:
+            return default
+        return response.lower() in ['y', 'yes']
+
+
+
+
+# ============================================
+# BUSINESS LOGIC LAYER
+# ============================================
+
+
+class WeatherService:
+    """Service layer for weather operations - separates logic from UI."""
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def fetch_weather(city: str) -> Optional[Dict]:
+        """Fetch weather data for a city."""
+        get_weather = DependencyManager.get_function('get_weather_data_openweather')
+        if not get_weather:
+            logger.error("Weather fetch function not available")
+            return None
+        return get_weather(city)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def parse_question(question: str, use_ollama: bool = False) -> Optional[Dict]:
+        """Parse a natural language question."""
+        parse_func = DependencyManager.get_function('parse_weather_question')
+        if not parse_func:
+            logger.error("Question parser not available")
+            return None
+        return parse_func(question, use_ollama=use_ollama)
+    
+    @staticmethod
+    @handle_errors(default_return="")
+    def generate_response(parsed: Dict, weather_data: Dict) -> str:
+        """Generate response from parsed question and weather data."""
+        response_func = DependencyManager.get_function('generate_weather_response')
+        if not response_func:
+            logger.error("Response generator not available")
+            return ""
+        return response_func(parsed, weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def display_weather(weather_data: Dict):
+        """Display weather data."""
+        display_func = DependencyManager.get_function('display_weather_for_city')
+        if display_func:
+            display_func(weather_data)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def process_to_dataframe(weather_data: Dict):
+        """Process weather data to DataFrame."""
+        process_func = DependencyManager.get_function('process_weather_to_dataframe')
+        if not process_func:
+            return None
+        return process_func(weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def visualize(df, city: str):
+        """Create visualizations."""
+        viz_func = DependencyManager.get_function('visualize_weather_data')
+        if viz_func and df is not None:
+            viz_func(df, city)
+
+
+
+
+# ============================================
+# APPLICATION MODES
+# ============================================
+
+
+class ApplicationMode:
+    """Base class for application modes."""
+    
+    def __init__(self, ui: UserInterface):
+        self.ui = ui
+        self.service = WeatherService()
+    
+    def run(self):
+        """Execute the mode. Override in subclasses."""
+        raise NotImplementedError
+
+
+
+
+class NaturalLanguageMode(ApplicationMode):
+    """Natural language question mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("💬 NATURAL LANGUAGE MODE")
+            self.ui.display_message("Ask questions in plain English. Type 'cancel' to return to main menu.", "info")
+            
+            examples = [
+                "What's the temperature in London?",
+                "Will it rain tomorrow in Paris?",
+                "How windy is it in Tokyo?"
+            ]
+            print("\nExamples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print("\nRequired format: A complete question with a city name")
+            print("="*70)
+            
+            # Get validated question
+            question = InputValidator.get_validated_input(
+                "\n❓ Your question",
+                InputValidator.validate_question,
+                max_attempts=3
+            )
+            
+            if not question:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            use_ai = self.ui.confirm("🤖 Use AI (Ollama)?", default=False)
+            
+            # Parse and process
+            print("\n🔍 Processing your question...")
+            parsed = self.service.parse_question(question, use_ai)
+            
+            if not parsed or not parsed.get('success'):
+                error = parsed.get('error', 'Unknown error') if parsed else 'Parsing failed'
+                self.ui.display_message(error, "error")
+                
+                # If city wasn't detected, ask user directly
+                if parsed and not parsed.get('city'):
+                    print("\n💡 Tip: Make sure to include a city name in your question")
+                    retry_city = InputValidator.get_validated_input(
+                        "Or enter city name directly",
+                        InputValidator.validate_city_name,
+                        max_attempts=2
+                    )
+                    if retry_city:
+                        parsed['city'] = retry_city
+                        parsed['success'] = True
+                    else:
+                        continue
+            
+            if parsed and parsed.get('success') and parsed.get('city'):
+                # Validate the extracted city
+                is_valid, error = InputValidator.validate_city_name(parsed['city'])
+                if not is_valid:
+                    self.ui.display_message(f"Invalid city: {error}", "error")
+                    continue
+                
+                self.ui.display_message(f"Understood: {parsed['query_type']} for {parsed['city']}", "success")
+                
+                # Fetch weather
+                weather_data = self.service.fetch_weather(parsed['city'])
+                
+                if weather_data:
+                    # Generate and display response
+                    response = self.service.generate_response(parsed, weather_data)
+                    self.ui.display_section("🤖 ANSWER", "")
+                    print(response)
+                    print("="*70)
+                else:
+                    self.ui.display_message(f"Could not fetch weather for {parsed['city']}", "error")
+                    self.ui.display_message("Please check the city name spelling and try again", "warning")
+            
+            # Ask if user wants to continue in this mode or return to menu
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["❓ Ask another question", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class QuickCheckMode(ApplicationMode):
+    """Quick weather check mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("🚀 QUICK WEATHER CHECK")
+            
+            print("Enter a city name to check the weather")
+            print("Format: Single city name (e.g., 'London', 'New York')")
+            print("Type 'cancel' to return to main menu")
+            print("="*70)
+            
+            # Get validated city input
+            city = InputValidator.get_validated_input(
+                "\n📍 Enter city name",
+                InputValidator.validate_city_name,
+                max_attempts=3
+            )
+            
+            if not city:
+                self.ui.display_message("Returning to main menu...", "info")
+                break
+            
+            self.ui.display_message(f"Fetching weather for {city}...", "info")
+            
+            weather_data = self.service.fetch_weather(city)
+            
+            if not weather_data:
+                self.ui.display_message(f"Could not fetch weather for {city}", "error")
+                self.ui.display_message("Possible reasons:", "warning")
+                print("  • City name might be misspelled")
+                print("  • City might not be in the weather database")
+                print("  • Network connection issue")
+                print("\n💡 Tip: Try using the full city name or check spelling")
+            else:
+                self.service.display_weather(weather_data)
+                
+                if self.ui.confirm("\n📊 Show visualizations?", default=False):
+                    df = self.service.process_to_dataframe(weather_data)
+                    if df is not None:
+                        print("\n📊 Weather Data Table:")
+                        print("="*70)
+                        print(df.to_string(index=False))
+                        print("\n🎨 Generating visualizations...")
+                        self.service.visualize(df, city)
+                    else:
+                        self.ui.display_message("Could not process data for visualization", "error")
+                
+                self.ui.display_message("Quick check complete!", "success")
+            
+            # Ask what to do next
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["🔍 Check another city", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class MenuMode(ApplicationMode):
+    """Terminal or Jupyter menu mode with city comparison feature."""
+    
+    @handle_errors()
+    def run(self):
+        # First, ask if user wants to use the menu or compare cities
+        choice = self.ui.get_choice(
+            "What would you like to do?",
+            ["🖥️  Open full menu interface", "🌍 Compare multiple cities", "↩️  Return to main menu"]
+        )
+        
+        if "Return to main menu" in choice:
+            return
+        
+        if "Compare multiple cities" in choice:
+            self.compare_cities_mode()
+        else:
+            # Try terminal menu first
+            menu_func = DependencyManager.get_function('weather_menu_pyinputplus')
+            if menu_func:
+                menu_func()
+                return
+            
+            # Try Jupyter menu
+            menu_func = DependencyManager.get_function('weather_menu_ipywidgets')
+            if menu_func:
+                menu_func()
+                return
+            
+            self.ui.display_message("No menu interface available", "error")
+    
+    def compare_cities_mode(self):
+        """Compare weather across multiple cities with validation."""
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("🌍 COMPARE MULTIPLE CITIES")
+            
+            print("Enter multiple cities separated by commas")
+            print("Format: City1, City2, City3 (e.g., 'London, Paris, Tokyo')")
+            print("  • Use commas to separate cities")
+            print("  • Each city should start with a capital letter")
+            print("  • Maximum 10 cities at once")
+            print("  • Type 'cancel' to return")
+            print("="*70)
+            
+            # Keep asking until we get valid input
+            city_list = None
+            while city_list is None:
+                cities_input = input("\n📍 Enter cities: ").strip()
+                
+                if cities_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                    self.ui.display_message("Returning to main menu...", "info")
+                    return
+                
+                # Validate city list
+                is_valid, error_message, validated_cities = InputValidator.validate_city_list(cities_input)
+                
+                if is_valid:
+                    city_list = validated_cities
+                else:
+                    # Show error and let user try again
+                    print(f"\n❌ {error_message}\n")
+                    print("💡 Please try again with the correct format.")
+            
+            # Display what we're comparing
+            print(f"\n✓ Valid input! Comparing {len(city_list)} cities:")
+            for i, city in enumerate(city_list, 1):
+                print(f"  {i}. {city}")
+            
+            self.ui.display_message(f"\n🔍 Fetching weather data for {len(city_list)} cities...", "info")
+            
+            # Use the dashboard comparison function
+            compare_func = DependencyManager.get_function('create_weather_dashboard')
+            if compare_func:
+                try:
+                    compare_func(city_list)
+                    self.ui.display_message("\n✓ Comparison complete!", "success")
+                except Exception as e:
+                    self.ui.display_message(f"Error during comparison: {e}", "error")
+            else:
+                # Fallback: fetch and display individually
+                for city in city_list:
+                    weather_data = self.service.fetch_weather(city)
+                    if weather_data:
+                        self.service.display_weather(weather_data)
+                    else:
+                        self.ui.display_message(f"Could not fetch weather for {city}", "error")
+            
+            # Ask what to do next
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["🌍 Compare more cities", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
+
+
+class WeatherDashboardApp:
+    """Main application orchestrator."""
+    
+    REQUIRED_FUNCTIONS = [
+        'get_weather_data_openweather',
+        'parse_weather_question',
+        'generate_weather_response',
+        'display_weather_for_city',
+        'process_weather_to_dataframe',
+        'visualize_weather_data'
+    ]
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.running = False
+        self.modes = {
+            '🖥️  Terminal Menu': MenuMode,
+            '💬 Natural Language': NaturalLanguageMode,
+            '🚀 Quick Check': QuickCheckMode,
+            '❌ Exit': None
+        }
+    
+    def check_system(self) -> bool:
+        """Perform system checks."""
+        self.ui.display_section("SYSTEM CHECK", "🔍")
+        
+        # Check dependencies
+        if not DependencyManager.all_dependencies_met():
+            self.ui.display_message("Missing required dependencies", "error")
+            deps = DependencyManager.check_dependencies()
+            missing = [m for m, available in deps['required'].items() if not available]
+            print(f"\nInstall with: pip install {' '.join(missing)}")
+            return False
+        
+        self.ui.display_message("All dependencies available", "success")
+        
+        # Check functions
+        if not DependencyManager.all_functions_available(self.REQUIRED_FUNCTIONS):
+            self.ui.display_message("Missing required functions", "error")
+            print("\nPlease run all previous cells before starting the application.")
+            return False
+        
+        self.ui.display_message("All functions available", "success")
+        return True
+    
+    def run(self):
+        """Main application loop."""
+        self.ui.display_banner(
+            "🌤️  WEATHER DASHBOARD APPLICATION  ⛅",
+            f"Version 1.0.0 • {datetime.now().strftime('%B %d, %Y')}"
+        )
+        
+        if not self.check_system():
+            self.ui.display_message("System check failed. Cannot start application.", "error")
+            return
+        
+        self.ui.display_message("System ready!", "success")
+        self.running = True
+        
+        while self.running:
+            print("\n")
+            mode_choice = self.ui.get_choice(
+                "Select interface mode:",
+                list(self.modes.keys())
+            )
+            
+            if mode_choice == '❌ Exit':
+                self.running = False
+                self.ui.display_banner("👋 Thank you for using Weather Dashboard!")
+                break
+            
+            # Get mode class and instantiate
+            mode_class = self.modes.get(mode_choice)
+            if mode_class:
+                mode = mode_class(self.ui)
+                mode.run()
+                # After mode completes, automatically return to main menu
+                self.ui.display_message("Returned to main menu.", "success")
+            else:
+                self.ui.display_message("Mode not available.", "error")
+
+
+
+
+# ============================================
+# FUNCTION REGISTRATION
+# ============================================
+
+
+def register_weather_functions():
+    """Register all weather functions in the dependency manager."""
+    function_map = {
+        'get_weather_data_openweather': 'get_weather_data_openweather',
+        'display_weather_for_city': 'display_weather_for_city',
+        'create_weather_dashboard': 'create_weather_dashboard',
+        'validate_city_input': 'validate_city_input',
+        'parse_weather_question': 'parse_weather_question',
+        'generate_weather_response': 'generate_weather_response',
+        'process_weather_to_dataframe': 'process_weather_to_dataframe',
+        'visualize_weather_data': 'visualize_weather_data',
+        'weather_menu_pyinputplus': 'weather_menu_pyinputplus',
+        'weather_menu_ipywidgets': 'weather_menu_ipywidgets'
+    }
+    
+    # Try to get functions from globals
+    for func_name, global_name in function_map.items():
+        if global_name in globals():
+            DependencyManager.register_function(func_name, globals()[global_name])
+
+
+
+
+# ============================================
+# START APPLICATION
+# ============================================
+
+
+print("🚀 Initializing Weather Dashboard Application...\n")
+register_weather_functions()
+
+
+app = WeatherDashboardApp()
+app.run()
+
+
+
+
+6th attempt follow-up prompt to improve code after testing:
+This code makes user type in city with capitalized first letter. Remove that rule, and let user type without even have to capitalize the first letter. Also add a function that can auto correct user's city name input if the user mispelled the city name.
+
+
+6th attempt improved code:
+"""
+WEATHER DASHBOARD - MAIN APPLICATION
+====================================
+Refactored version with improved architecture, modularity, and maintainability.
+Run this cell to start the Weather Dashboard application.
+"""
+
+
+import sys
+import logging
+from datetime import datetime
+from typing import Callable, Dict, Optional, List
+from functools import wraps
+
+
+# ============================================
+# LOGGING CONFIGURATION
+# ============================================
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================
+# DEPENDENCY & FUNCTION REGISTRY
+# ============================================
+
+
+class DependencyManager:
+    """Centralized dependency and function validation."""
+    
+    REQUIRED_MODULES = {
+        'requests': 'API calls',
+        'pandas': 'Data processing',
+        'matplotlib': 'Visualizations',
+    }
+    
+    OPTIONAL_MODULES = {
+        'pyinputplus': 'Terminal menu',
+        'ipywidgets': 'Jupyter widgets'
+    }
+    
+    # Registry of required functions (set by external code)
+    function_registry: Dict[str, Callable] = {}
+    
+    @classmethod
+    def register_function(cls, name: str, func: Callable):
+        """Register a function in the global registry."""
+        cls.function_registry[name] = func
+    
+    @classmethod
+    def get_function(cls, name: str) -> Optional[Callable]:
+        """Retrieve a registered function."""
+        return cls.function_registry.get(name)
+    
+    @classmethod
+    def check_dependencies(cls) -> Dict[str, bool]:
+        """Check all required dependencies."""
+        results = {'required': {}, 'optional': {}}
+        
+        for module, purpose in cls.REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+                results['required'][module] = True
+            except ImportError:
+                results['required'][module] = False
+                logger.warning(f"Missing required module: {module} ({purpose})")
+        
+        for module, purpose in cls.OPTIONAL_MODULES.items():
+            try:
+                __import__(module)
+                results['optional'][module] = True
+            except ImportError:
+                results['optional'][module] = False
+                logger.info(f"Optional module not available: {module} ({purpose})")
+        
+        return results
+    
+    @classmethod
+    def check_functions(cls, required_functions: List[str]) -> Dict[str, bool]:
+        """Check if required functions are registered."""
+        results = {}
+        for func_name in required_functions:
+            results[func_name] = func_name in cls.function_registry
+            if not results[func_name]:
+                logger.warning(f"Missing required function: {func_name}")
+        return results
+    
+    @classmethod
+    def all_dependencies_met(cls) -> bool:
+        """Check if all required dependencies are available."""
+        deps = cls.check_dependencies()
+        return all(deps['required'].values())
+    
+    @classmethod
+    def all_functions_available(cls, required_functions: List[str]) -> bool:
+        """Check if all required functions are available."""
+        funcs = cls.check_functions(required_functions)
+        return all(funcs.values())
+
+
+
+
+# ============================================
+# ERROR HANDLING DECORATORS
+# ============================================
+
+
+def handle_errors(default_return=None):
+    """Unified error handler decorator."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                logger.info("\nOperation cancelled by user")
+                return default_return
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default_return
+        return wrapper
+    return decorator
+
+
+
+
+# ============================================
+# INPUT VALIDATION LAYER
+# ============================================
+
+
+class InputValidator:
+    """Centralized input validation for all user inputs."""
+    
+    # Common cities database for auto-correction
+    KNOWN_CITIES = [
+        'London', 'Paris', 'Tokyo', 'New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix',
+        'Philadelphia', 'San Antonio', 'San Diego', 'Dallas', 'San Jose', 'Austin', 'Jacksonville',
+        'Fort Worth', 'Columbus', 'Charlotte', 'San Francisco', 'Indianapolis', 'Seattle', 'Denver',
+        'Washington', 'Boston', 'El Paso', 'Nashville', 'Detroit', 'Oklahoma City', 'Portland',
+        'Las Vegas', 'Memphis', 'Louisville', 'Baltimore', 'Milwaukee', 'Albuquerque', 'Tucson',
+        'Fresno', 'Sacramento', 'Kansas City', 'Mesa', 'Atlanta', 'Omaha', 'Colorado Springs',
+        'Raleigh', 'Miami', 'Long Beach', 'Virginia Beach', 'Oakland', 'Minneapolis', 'Tulsa',
+        'Tampa', 'Arlington', 'New Orleans', 'Wichita', 'Cleveland', 'Bakersfield', 'Aurora',
+        'Anaheim', 'Honolulu', 'Santa Ana', 'Riverside', 'Corpus Christi', 'Lexington', 'Henderson',
+        'Stockton', 'Saint Paul', 'Cincinnati', 'St. Louis', 'Pittsburgh', 'Greensboro', 'Lincoln',
+        'Anchorage', 'Plano', 'Orlando', 'Irvine', 'Newark', 'Durham', 'Chula Vista', 'Toledo',
+        'Fort Wayne', 'St. Petersburg', 'Laredo', 'Jersey City', 'Chandler', 'Madison', 'Lubbock',
+        'Scottsdale', 'Reno', 'Buffalo', 'Gilbert', 'Glendale', 'North Las Vegas', 'Winston-Salem',
+        'Chesapeake', 'Norfolk', 'Fremont', 'Garland', 'Irving', 'Hialeah', 'Richmond', 'Boise',
+        'Spokane', 'Baton Rouge', 'Tacoma', 'San Bernardino', 'Modesto', 'Fontana', 'Des Moines',
+        'Birmingham', 'Berlin', 'Madrid', 'Rome', 'Vienna', 'Amsterdam', 'Brussels', 'Copenhagen',
+        'Dublin', 'Helsinki', 'Lisbon', 'Oslo', 'Prague', 'Stockholm', 'Warsaw', 'Athens',
+        'Budapest', 'Bucharest', 'Sofia', 'Zagreb', 'Belgrade', 'Bratislava', 'Ljubljana',
+        'Vilnius', 'Tallinn', 'Riga', 'Luxembourg', 'Valletta', 'Nicosia', 'Reykjavik',
+        'Moscow', 'Saint Petersburg', 'Kiev', 'Minsk', 'Istanbul', 'Ankara', 'Tehran',
+        'Baghdad', 'Riyadh', 'Dubai', 'Abu Dhabi', 'Doha', 'Kuwait City', 'Beirut', 'Damascus',
+        'Jerusalem', 'Cairo', 'Casablanca', 'Algiers', 'Tunis', 'Tripoli', 'Khartoum',
+        'Addis Ababa', 'Nairobi', 'Kampala', 'Dar es Salaam', 'Johannesburg', 'Cape Town',
+        'Durban', 'Pretoria', 'Lagos', 'Accra', 'Dakar', 'Abidjan', 'Kinshasa', 'Luanda',
+        'Beijing', 'Shanghai', 'Guangzhou', 'Shenzhen', 'Chengdu', 'Hangzhou', 'Wuhan',
+        'Hong Kong', 'Taipei', 'Seoul', 'Busan', 'Pyongyang', 'Ulaanbaatar', 'Bangkok',
+        'Singapore', 'Kuala Lumpur', 'Jakarta', 'Manila', 'Ho Chi Minh City', 'Hanoi',
+        'Yangon', 'Phnom Penh', 'Vientiane', 'Dhaka', 'Karachi', 'Lahore', 'Islamabad',
+        'Mumbai', 'Delhi', 'Bangalore', 'Hyderabad', 'Chennai', 'Kolkata', 'Pune', 'Ahmedabad',
+        'Kathmandu', 'Colombo', 'Kabul', 'Tashkent', 'Almaty', 'Astana', 'Bishkek', 'Dushanbe',
+        'Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Auckland', 'Wellington',
+        'Mexico City', 'Guadalajara', 'Monterrey', 'Puebla', 'Tijuana', 'Guatemala City',
+        'San Salvador', 'Managua', 'San Jose', 'Panama City', 'Havana', 'Kingston',
+        'Port-au-Prince', 'Santo Domingo', 'Caracas', 'Bogota', 'Quito', 'Lima', 'La Paz',
+        'Santiago', 'Buenos Aires', 'Montevideo', 'Asuncion', 'Brasilia', 'Sao Paulo',
+        'Rio de Janeiro', 'Belo Horizonte', 'Recife', 'Salvador'
+    ]
+    
+    @staticmethod
+    def levenshtein_distance(s1: str, s2: str) -> int:
+        """Calculate the Levenshtein distance between two strings."""
+        if len(s1) < len(s2):
+            return InputValidator.levenshtein_distance(s2, s1)
+        
+        if len(s2) == 0:
+            return len(s1)
+        
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        
+        return previous_row[-1]
+    
+    @staticmethod
+    def auto_correct_city(city: str) -> tuple[str, bool, list]:
+        """
+        Auto-correct a city name using fuzzy matching.
+        
+        Returns:
+            tuple: (corrected_city, was_corrected, suggestions)
+        """
+        # Capitalize first letter of each word
+        city_formatted = city.title()
+        
+        # If exact match found, return it
+        if city_formatted in InputValidator.KNOWN_CITIES:
+            return city_formatted, False, []
+        
+        # Find close matches using Levenshtein distance
+        suggestions = []
+        for known_city in InputValidator.KNOWN_CITIES:
+            distance = InputValidator.levenshtein_distance(city_formatted.lower(), known_city.lower())
+            
+            # Only consider if distance is small relative to length
+            max_distance = max(2, len(city_formatted) // 3)
+            
+            if distance <= max_distance:
+                suggestions.append((known_city, distance))
+        
+        # Sort by distance
+        suggestions.sort(key=lambda x: x[1])
+        
+        # Return top suggestions
+        top_suggestions = [s[0] for s in suggestions[:5]]
+        
+        if suggestions and suggestions[0][1] <= 2:
+            # Very close match - auto-correct
+            return suggestions[0][0], True, top_suggestions
+        elif suggestions:
+            # Some matches - return for user to choose
+            return city_formatted, False, top_suggestions
+        else:
+            # No matches - return formatted version
+            return city_formatted, False, []
+    
+    @staticmethod
+    def validate_city_name(city: str) -> tuple[bool, str]:
+        """
+        Validate a single city name.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not city or not city.strip():
+            return False, "City name cannot be empty"
+        
+        city = city.strip()
+        
+        # Check minimum length
+        if len(city) < 2:
+            return False, "City name must be at least 2 characters long"
+        
+        # Check if only numbers
+        if city.replace(" ", "").isdigit():
+            return False, "City name cannot contain only numbers"
+        
+        # Check for invalid special characters (allow spaces, hyphens, apostrophes, periods)
+        invalid_chars = "!@#$%^&*()_+={}[]|\\:;\"<>?/,"
+        if any(char in city for char in invalid_chars):
+            return False, f"City name cannot contain special characters like {invalid_chars}"
+        
+        return True, ""
+    
+    @staticmethod
+    def validate_city_list(cities_input: str) -> tuple[bool, str, list]:
+        """
+        Validate a comma-separated list of cities.
+        
+        Returns:
+            tuple: (is_valid, error_message, city_list)
+        """
+        if not cities_input or not cities_input.strip():
+            return False, "Please enter at least one city name", []
+        
+        # Split by comma
+        cities = [city.strip() for city in cities_input.split(',')]
+        
+        # Remove empty strings
+        cities = [city for city in cities if city]
+        
+        if not cities:
+            return False, "No valid cities found. Please separate cities with commas", []
+        
+        # Validate each city
+        validated_cities = []
+        errors = []
+        
+        for i, city in enumerate(cities, 1):
+            is_valid, error = InputValidator.validate_city_name(city)
+            if is_valid:
+                # Auto-correct the city name
+                corrected, was_corrected, _ = InputValidator.auto_correct_city(city)
+                validated_cities.append(corrected)
+            else:
+                errors.append(f"City #{i} ('{city}'): {error}")
+        
+        if errors:
+            error_message = "Invalid city names found:\n  • " + "\n  • ".join(errors)
+            error_message += "\n\nFormat: City1, City2, City3 (e.g., 'london, paris, tokyo')"
+            return False, error_message, []
+        
+        if len(validated_cities) > 10:
+            return False, "Too many cities (max 10). Please reduce the number of cities", []
+        
+        return True, "", validated_cities
+    
+    @staticmethod
+    def validate_question(question: str) -> tuple[bool, str]:
+        """
+        Validate a natural language weather question.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not question or not question.strip():
+            return False, "Question cannot be empty"
+        
+        question = question.strip()
+        
+        if len(question) < 5:
+            return False, "Question is too short. Please ask a complete question"
+        
+        if len(question) > 500:
+            return False, "Question is too long. Please keep it under 500 characters"
+        
+        # Check if question contains at least some letters
+        if not any(c.isalpha() for c in question):
+            return False, "Question must contain letters"
+        
+        return True, ""
+    
+    @staticmethod
+    def get_validated_input(prompt: str, validator_func, max_attempts: int = None) -> Optional[str]:
+        """
+        Get validated input from user with automatic retry logic.
+        
+        Args:
+            prompt: Input prompt
+            validator_func: Function that validates input (returns tuple[bool, str])
+            max_attempts: Maximum number of retry attempts (None = infinite)
+            
+        Returns:
+            Validated input or None if user cancels
+        """
+        attempts = 0
+        
+        while max_attempts is None or attempts < max_attempts:
+            user_input = input(f"{prompt}: ").strip()
+            
+            # Allow user to exit
+            if user_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                return None
+            
+            # Validate input
+            is_valid, error_message = validator_func(user_input)
+            
+            if is_valid:
+                return user_input
+            
+            # Show error and automatically retry
+            attempts += 1
+            print(f"\n❌ {error_message}")
+            
+            if max_attempts is not None:
+                remaining = max_attempts - attempts
+                if remaining > 0:
+                    print(f"⚠️  {remaining} attempt(s) remaining. Try again or type 'cancel' to go back.\n")
+                else:
+                    print("❌ Maximum attempts reached. Returning to previous menu.\n")
+                    return None
+            else:
+                print("💡 Please try again with the correct format.\n")
+        
+        return None
+
+
+class UserInterface:
+    """Abstract interface for user interaction - decouples UI from logic."""
+    
+    @staticmethod
+    def display_banner(title: str, subtitle: str = ""):
+        """Display a formatted banner."""
+        print("\n" + "="*70)
+        print(f"{title:^70}")
+        if subtitle:
+            print(f"{subtitle:^70}")
+        print("="*70 + "\n")
+    
+    @staticmethod
+    def display_section(title: str, icon: str = ""):
+        """Display a section header."""
+        print(f"\n{icon} {title}")
+        print("-"*70)
+    
+    @staticmethod
+    def display_message(message: str, msg_type: str = "info"):
+        """Display a formatted message."""
+        icons = {
+            'success': '✓',
+            'error': '❌',
+            'warning': '⚠️',
+            'info': 'ℹ️',
+            'question': '❓'
+        }
+        icon = icons.get(msg_type, '')
+        print(f"{icon} {message}")
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        """Get user input with prompt."""
+        try:
+            value = input(f"{prompt}: ").strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return ""
+    
+    @staticmethod
+    def get_choice(prompt: str, options: List[str]) -> str:
+        """Get user choice from options."""
+        print(f"\n{prompt}\n")
+        for i, option in enumerate(options, 1):
+            print(f"{i}. {option}")
+        
+        while True:
+            choice = UserInterface.get_input("\nEnter your choice")
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                return options[int(choice) - 1]
+            UserInterface.display_message("Invalid choice. Please try again.", "error")
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = True) -> bool:
+        """Get yes/no confirmation."""
+        default_str = "Y/n" if default else "y/N"
+        response = UserInterface.get_input(f"{prompt} ({default_str})")
+        
+        if not response:
+            return default
+        return response.lower() in ['y', 'yes']
+
+
+
+
+# ============================================
+# BUSINESS LOGIC LAYER
+# ============================================
+
+
+class WeatherService:
+    """Service layer for weather operations - separates logic from UI."""
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def fetch_weather(city: str) -> Optional[Dict]:
+        """Fetch weather data for a city."""
+        get_weather = DependencyManager.get_function('get_weather_data_openweather')
+        if not get_weather:
+            logger.error("Weather fetch function not available")
+            return None
+        return get_weather(city)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def parse_question(question: str, use_ollama: bool = False) -> Optional[Dict]:
+        """Parse a natural language question."""
+        parse_func = DependencyManager.get_function('parse_weather_question')
+        if not parse_func:
+            logger.error("Question parser not available")
+            return None
+        return parse_func(question, use_ollama=use_ollama)
+    
+    @staticmethod
+    @handle_errors(default_return="")
+    def generate_response(parsed: Dict, weather_data: Dict) -> str:
+        """Generate response from parsed question and weather data."""
+        response_func = DependencyManager.get_function('generate_weather_response')
+        if not response_func:
+            logger.error("Response generator not available")
+            return ""
+        return response_func(parsed, weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def display_weather(weather_data: Dict):
+        """Display weather data."""
+        display_func = DependencyManager.get_function('display_weather_for_city')
+        if display_func:
+            display_func(weather_data)
+    
+    @staticmethod
+    @handle_errors(default_return=None)
+    def process_to_dataframe(weather_data: Dict):
+        """Process weather data to DataFrame."""
+        process_func = DependencyManager.get_function('process_weather_to_dataframe')
+        if not process_func:
+            return None
+        return process_func(weather_data)
+    
+    @staticmethod
+    @handle_errors()
+    def visualize(df, city: str):
+        """Create visualizations."""
+        viz_func = DependencyManager.get_function('visualize_weather_data')
+        if viz_func and df is not None:
+            viz_func(df, city)
+
+
+
+
+# ============================================
+# APPLICATION MODES
+# ============================================
+
+
+class ApplicationMode:
+    """Base class for application modes."""
+    
+    def __init__(self, ui: UserInterface):
+        self.ui = ui
+        self.service = WeatherService()
+    
+    def run(self):
+        """Execute the mode. Override in subclasses."""
+        raise NotImplementedError
+
+
+
+
+class NaturalLanguageMode(ApplicationMode):
+    """Natural language question mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("💬 NATURAL LANGUAGE MODE")
+            self.ui.display_message("Ask questions in plain English. Type 'cancel' to return to main menu.", "info")
+            
+            examples = [
+                "What's the temperature in London?",
+                "Will it rain tomorrow in Paris?",
+                "How windy is it in Tokyo?"
+            ]
+            print("\nExamples:")
+            for ex in examples:
+                print(f"  • {ex}")
+            print("\nRequired format: A complete question with a city name")
+            print("="*70)
+            
+            # Get validated question - loop until valid
+            question = None
+            while question is None:
+                question_input = input("\n❓ Your question: ").strip()
+                
+                # Check for cancel
+                if question_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                    self.ui.display_message("Returning to main menu...", "info")
+                    return
+                
+                # Validate
+                is_valid, error_message = InputValidator.validate_question(question_input)
+                
+                if is_valid:
+                    question = question_input
+                else:
+                    print(f"\n❌ {error_message}")
+                    print("💡 Please try again with a complete question.\n")
+            
+            use_ai = self.ui.confirm("🤖 Use AI (Ollama)?", default=False)
+            
+            # Parse and process
+            print("\n🔍 Processing your question...")
+            parsed = self.service.parse_question(question, use_ai)
+            
+            if not parsed or not parsed.get('success'):
+                error = parsed.get('error', 'Unknown error') if parsed else 'Parsing failed'
+                self.ui.display_message(error, "error")
+                
+                # If city wasn't detected, ask user directly with validation loop
+                if parsed and not parsed.get('city'):
+                    print("\n💡 Tip: Make sure to include a city name in your question")
+                    
+                    city = None
+                    while city is None:
+                        city_input = input("Enter city name directly: ").strip()
+                        
+                        if city_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                            break
+                        
+                        is_valid, error = InputValidator.validate_city_name(city_input)
+                        if is_valid:
+                            city = city_input
+                            parsed['city'] = city
+                            parsed['success'] = True
+                        else:
+                            print(f"\n❌ {error}")
+                            print("💡 Please try again.\n")
+                    
+                    if not city:
+                        continue
+            
+            if parsed and parsed.get('success') and parsed.get('city'):
+                # Validate the extracted city
+                is_valid, error = InputValidator.validate_city_name(parsed['city'])
+                if not is_valid:
+                    self.ui.display_message(f"Invalid city: {error}", "error")
+                    continue
+                
+                self.ui.display_message(f"Understood: {parsed['query_type']} for {parsed['city']}", "success")
+                
+                # Fetch weather
+                weather_data = self.service.fetch_weather(parsed['city'])
+                
+                if weather_data:
+                    # Generate and display response
+                    response = self.service.generate_response(parsed, weather_data)
+                    self.ui.display_section("🤖 ANSWER", "")
+                    print(response)
+                    print("="*70)
+                else:
+                    self.ui.display_message(f"Could not fetch weather for {parsed['city']}", "error")
+                    self.ui.display_message("Please check the city name spelling and try again", "warning")
+            
+            # Ask if user wants to continue in this mode or return to menu
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["❓ Ask another question", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class QuickCheckMode(ApplicationMode):
+    """Quick weather check mode."""
+    
+    @handle_errors()
+    def run(self):
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("🚀 QUICK WEATHER CHECK")
+            
+            print("Enter a city name to check the weather")
+            print("Format: Single city name (e.g., 'London', 'New York')")
+            print("Type 'cancel' to return to main menu")
+            print("="*70)
+            
+            # Get validated city input - loop until valid
+            city = None
+            while city is None:
+                city_input = input("\n📍 Enter city name: ").strip()
+                
+                # Check for cancel
+                if city_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                    self.ui.display_message("Returning to main menu...", "info")
+                    return
+                
+                # Validate
+                is_valid, error_message = InputValidator.validate_city_name(city_input)
+                
+                if is_valid:
+                    city = city_input
+                else:
+                    print(f"\n❌ {error_message}")
+                    print("💡 Please try again with the correct format.\n")
+            
+            self.ui.display_message(f"Fetching weather for {city}...", "info")
+            
+            weather_data = self.service.fetch_weather(city)
+            
+            if not weather_data:
+                self.ui.display_message(f"Could not fetch weather for {city}", "error")
+                self.ui.display_message("Possible reasons:", "warning")
+                print("  • City name might be misspelled")
+                print("  • City might not be in the weather database")
+                print("  • Network connection issue")
+                print("\n💡 Tip: Try using the full city name or check spelling")
+            else:
+                self.service.display_weather(weather_data)
+                
+                if self.ui.confirm("\n📊 Show visualizations?", default=False):
+                    df = self.service.process_to_dataframe(weather_data)
+                    if df is not None:
+                        print("\n📊 Weather Data Table:")
+                        print("="*70)
+                        print(df.to_string(index=False))
+                        print("\n🎨 Generating visualizations...")
+                        self.service.visualize(df, city)
+                    else:
+                        self.ui.display_message("Could not process data for visualization", "error")
+                
+                self.ui.display_message("Quick check complete!", "success")
+            
+            # Ask what to do next
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["🔍 Check another city", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+class MenuMode(ApplicationMode):
+    """Terminal or Jupyter menu mode with city comparison feature."""
+    
+    @handle_errors()
+    def run(self):
+        # First, ask if user wants to use the menu or compare cities
+        choice = self.ui.get_choice(
+            "What would you like to do?",
+            ["🖥️  Open full menu interface", "🌍 Compare multiple cities", "↩️  Return to main menu"]
+        )
+        
+        if "Return to main menu" in choice:
+            return
+        
+        if "Compare multiple cities" in choice:
+            self.compare_cities_mode()
+        else:
+            # Try terminal menu first
+            menu_func = DependencyManager.get_function('weather_menu_pyinputplus')
+            if menu_func:
+                menu_func()
+                return
+            
+            # Try Jupyter menu
+            menu_func = DependencyManager.get_function('weather_menu_ipywidgets')
+            if menu_func:
+                menu_func()
+                return
+            
+            self.ui.display_message("No menu interface available", "error")
+    
+    def compare_cities_mode(self):
+        """Compare weather across multiple cities with validation."""
+        continue_mode = True
+        
+        while continue_mode:
+            self.ui.display_banner("🌍 COMPARE MULTIPLE CITIES")
+            
+            print("Enter multiple cities separated by commas")
+            print("Format: City1, City2, City3 (e.g., 'London, Paris, Tokyo')")
+            print("  • Use commas to separate cities")
+            print("  • Each city should start with a capital letter")
+            print("  • Maximum 10 cities at once")
+            print("  • Type 'cancel' to return")
+            print("="*70)
+            
+            # Keep asking until we get valid input
+            city_list = None
+            while city_list is None:
+                cities_input = input("\n📍 Enter cities: ").strip()
+                
+                if cities_input.lower() in ['exit', 'quit', 'back', 'menu', 'cancel']:
+                    self.ui.display_message("Returning to main menu...", "info")
+                    return
+                
+                # Validate city list
+                is_valid, error_message, validated_cities = InputValidator.validate_city_list(cities_input)
+                
+                if is_valid:
+                    city_list = validated_cities
+                else:
+                    # Show error and let user try again
+                    print(f"\n❌ {error_message}\n")
+                    print("💡 Please try again with the correct format.")
+            
+            # Display what we're comparing
+            print(f"\n✓ Valid input! Comparing {len(city_list)} cities:")
+            for i, city in enumerate(city_list, 1):
+                print(f"  {i}. {city}")
+            
+            self.ui.display_message(f"\n🔍 Fetching weather data for {len(city_list)} cities...", "info")
+            
+            # Use the dashboard comparison function
+            compare_func = DependencyManager.get_function('create_weather_dashboard')
+            if compare_func:
+                try:
+                    compare_func(city_list)
+                    self.ui.display_message("\n✓ Comparison complete!", "success")
+                except Exception as e:
+                    self.ui.display_message(f"Error during comparison: {e}", "error")
+            else:
+                # Fallback: fetch and display individually
+                for city in city_list:
+                    weather_data = self.service.fetch_weather(city)
+                    if weather_data:
+                        self.service.display_weather(weather_data)
+                    else:
+                        self.ui.display_message(f"Could not fetch weather for {city}", "error")
+            
+            # Ask what to do next
+            print("\n" + "-"*70)
+            choice = self.ui.get_choice(
+                "What would you like to do next?",
+                ["🌍 Compare more cities", "↩️  Return to main menu"]
+            )
+            
+            if "Return to main menu" in choice:
+                continue_mode = False
+
+
+
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
+
+
+class WeatherDashboardApp:
+    """Main application orchestrator."""
+    
+    REQUIRED_FUNCTIONS = [
+        'get_weather_data_openweather',
+        'parse_weather_question',
+        'generate_weather_response',
+        'display_weather_for_city',
+        'process_weather_to_dataframe',
+        'visualize_weather_data'
+    ]
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.running = False
+        self.modes = {
+            '🖥️  Terminal Menu': MenuMode,
+            '💬 Natural Language': NaturalLanguageMode,
+            '🚀 Quick Check': QuickCheckMode,
+            '❌ Exit': None
+        }
+    
+    def check_system(self) -> bool:
+        """Perform system checks."""
+        self.ui.display_section("SYSTEM CHECK", "🔍")
+        
+        # Check dependencies
+        if not DependencyManager.all_dependencies_met():
+            self.ui.display_message("Missing required dependencies", "error")
+            deps = DependencyManager.check_dependencies()
+            missing = [m for m, available in deps['required'].items() if not available]
+            print(f"\nInstall with: pip install {' '.join(missing)}")
+            return False
+        
+        self.ui.display_message("All dependencies available", "success")
+        
+        # Check functions
+        if not DependencyManager.all_functions_available(self.REQUIRED_FUNCTIONS):
+            self.ui.display_message("Missing required functions", "error")
+            print("\nPlease run all previous cells before starting the application.")
+            return False
+        
+        self.ui.display_message("All functions available", "success")
+        return True
+    
+    def run(self):
+        """Main application loop."""
+        self.ui.display_banner(
+            "🌤️  WEATHER DASHBOARD APPLICATION  ⛅",
+            f"Version 1.0.0 • {datetime.now().strftime('%B %d, %Y')}"
+        )
+        
+        if not self.check_system():
+            self.ui.display_message("System check failed. Cannot start application.", "error")
+            return
+        
+        self.ui.display_message("System ready!", "success")
+        self.running = True
+        
+        while self.running:
+            print("\n")
+            mode_choice = self.ui.get_choice(
+                "Select interface mode:",
+                list(self.modes.keys())
+            )
+            
+            if mode_choice == '❌ Exit':
+                self.running = False
+                self.ui.display_banner("👋 Thank you for using Weather Dashboard!")
+                break
+            
+            # Get mode class and instantiate
+            mode_class = self.modes.get(mode_choice)
+            if mode_class:
+                mode = mode_class(self.ui)
+                mode.run()
+                # After mode completes, automatically return to main menu
+                self.ui.display_message("Returned to main menu.", "success")
+            else:
+                self.ui.display_message("Mode not available.", "error")
+
+
+
+
+# ============================================
+# FUNCTION REGISTRATION
+# ============================================
+
+
+def register_weather_functions():
+    """Register all weather functions in the dependency manager."""
+    function_map = {
+        'get_weather_data_openweather': 'get_weather_data_openweather',
+        'display_weather_for_city': 'display_weather_for_city',
+        'create_weather_dashboard': 'create_weather_dashboard',
+        'validate_city_input': 'validate_city_input',
+        'parse_weather_question': 'parse_weather_question',
+        'generate_weather_response': 'generate_weather_response',
+        'process_weather_to_dataframe': 'process_weather_to_dataframe',
+        'visualize_weather_data': 'visualize_weather_data',
+        'weather_menu_pyinputplus': 'weather_menu_pyinputplus',
+        'weather_menu_ipywidgets': 'weather_menu_ipywidgets'
+    }
+    
+    # Try to get functions from globals
+    for func_name, global_name in function_map.items():
+        if global_name in globals():
+            DependencyManager.register_function(func_name, globals()[global_name])
+
+
+
+
+# ============================================
+# START APPLICATION
+# ============================================
+
+
+print("🚀 Initializing Weather Dashboard Application...\n")
+register_weather_functions()
+
+
+app = WeatherDashboardApp()
+app.run()

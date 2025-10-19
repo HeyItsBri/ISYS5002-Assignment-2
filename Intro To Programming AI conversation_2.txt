@@ -1,0 +1,732 @@
+﻿====
+
+
+AI conversation about function enhancements
+
+
+====
+
+
+Tool used: Claude
+Time: 10/10/2025
+
+
+===
+
+
+Summary:
+In this example, I specifically asked Claude to add humidity and wind speed to add to the weather data function that I had. I also asked Claude to suggest other features to add to make the function more appealing. I then create follow-up prompts addressing the specific function in the code I’d like to enhance, especially with error handling. Moreover, I suggested Claude to use Panda for the Data table so that I can work with a package that I’m more familiar with.
+
+
+This strategy worked very well because it gives Claude a specific area to improve, and follows up with what to improve. Without instruction, Claude would create a function that asks for user’s input from the beginning to use as data for visualization. Instead, I successfully prompted Claude to create a data table using the first cell’s result to be analyzed in the visualization cell, reducing user’s effort and enhancing user experience. 
+
+
+===
+
+
+Me: The current function looks a bit lacking. I want to add these, and also suggest me what else I should include: def 
+feels_like = current['main']['feels_like']
+
+
+    humidity = current['main']['humidity']
+    wind_speed = current['wind']['speed']
+
+
+    print(f"\n  Current Temperature: {temp}°C (Feels like {feels_like}°C)")
+
+
+    print(f"\nHumidity: {humidity}%")
+    print(f”\n Wind Speed: {wind_speed} m/s")
+
+
+    print(f"\n 5-Day Forecast:")
+    print("-" * 50)
+
+
+
+
+    current_date = None
+        if date != current_date and date_time.hour == 12:
+            current_date = date
+            temp_max = item['main']['temp_max']
+            temp_min = item['main']['temp_min']
+            description = item['weather'][0]['description']
+
+
+Claude:
+Great additions! Let me update your weather dashboard with those features and suggest some other useful things to include:Perfect! I've added all your features plus some extras. Here's what's new:
+What I added from your list: • Feels like temperature - Shows how it actually feels outside • Humidity - Moisture in the air • Wind speed - How fast the wind is blowing • 5-Day Forecast - Shows noon weather for the next 5 days with high/low temps
+Extra features I included: • Atmospheric pressure - Useful for predicting weather changes • Visibility - How far you can see (in kilometers) • Country code - Shows which country the city is in • Day names - Shows "Monday, Tuesday" etc. for the forecast • Better organization - Created a separate function display_weather_for_city() to keep things tidy
+Other cool things you could add: • Sunrise/sunset times - When the sun rises and sets • UV index - How strong the sun's rays are • Rain probability - Chance of rain (if available in forecast) • Temperature units toggle - Switch between Celsius and Fahrenheit • Weather alerts - Warnings about severe weather • Save to file - Export the dashboard to a text file
+Want me to add any of these? Let me know! 🌦️
+import requests
+from datetime import datetime
+
+
+def get_weather_data_openweather(location, forecast_days=5, api_key="8c9d00096e85ca3599502e89d125af21"):
+    """Gets current weather and forecast data for a specific location"""
+    
+    # Get current weather
+    current_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={api_key}&units=metric"
+    
+    # Get 5-day forecast
+    forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?q={location}&appid={api_key}&units=metric"
+    
+    try:
+        # Request both current weather and forecast
+        current_response = requests.get(current_url)
+        forecast_response = requests.get(forecast_url)
+        
+        # Check if both requests were successful
+        if current_response.status_code == 200 and forecast_response.status_code == 200:
+            return {
+                'current': current_response.json(),
+                'forecast': forecast_response.json()
+            }
+        else:
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error fetching data for {location}: {e}")
+        return None
+
+
+def display_weather_for_city(weather_data):
+    """Displays detailed weather information for one city"""
+    
+    current = weather_data['current']
+    forecast = weather_data['forecast']
+    
+    # Extract current weather details
+    city_name = current['name']
+    country = current['sys']['country']
+    temp = current['main']['temp']
+    feels_like = current['main']['feels_like']
+    humidity = current['main']['humidity']
+    wind_speed = current['wind']['speed']
+    description = current['weather'][0]['description']
+    pressure = current['main']['pressure']
+    visibility = current.get('visibility', 0) / 1000  # Convert to km
+    
+    # Display city header
+    print("\n" + "="*50)
+    print(f"📍 {city_name}, {country}")
+    print("="*50)
+    
+    # Display current conditions
+    print(f"☁️  Conditions: {description.title()}")
+    print(f"🌡️  Current Temperature: {temp}°C (Feels like {feels_like}°C)")
+    print(f"💧 Humidity: {humidity}%")
+    print(f"💨 Wind Speed: {wind_speed} m/s")
+    print(f"🎈 Pressure: {pressure} hPa")
+    print(f"👁️  Visibility: {visibility:.1f} km")
+    
+    # Display 5-day forecast
+    print(f"\n📅 5-Day Forecast:")
+    print("-" * 50)
+    
+    # Group forecasts by date
+    current_date = None
+    
+    for item in forecast['list']:
+        # Get the date and time from forecast
+        date_time = datetime.fromtimestamp(item['dt'])
+        date = date_time.strftime('%Y-%m-%d')
+        
+        # Only show one forecast per day (use noon forecast)
+        if date != current_date and date_time.hour == 12:
+            current_date = date
+            temp_max = item['main']['temp_max']
+            temp_min = item['main']['temp_min']
+            description = item['weather'][0]['description']
+            day_name = date_time.strftime('%A')
+            
+            print(f"{day_name}, {date_time.strftime('%b %d')}:")
+            print(f"  🌡️  High: {temp_max}°C | Low: {temp_min}°C")
+            print(f"  ☁️  {description.title()}")
+            print()
+
+
+def create_weather_dashboard(city_list):
+    """Creates and displays a weather dashboard for given cities"""
+    
+    # Initialize empty list for storing weather data
+    city_weather_data = []
+    
+    # Loop through each city
+    for city in city_list:
+        # Get weather data using our function
+        weather_data = get_weather_data_openweather(city)
+        
+        # Check if we got data successfully
+        if weather_data:
+            city_weather_data.append(weather_data)
+        else:
+            print(f"❌ Error: Could not get weather for {city}")
+    
+    # Display the dashboard header
+    print("\n" + "="*50)
+    print("🌤️  WEATHER DASHBOARD")
+    print("="*50)
+    
+    # Display current date and time
+    current_time = datetime.now().strftime("%B %d, %Y - %I:%M %p")
+    print(f"📅 {current_time}")
+    
+    # Display weather for each city
+    for data in city_weather_data:
+        display_weather_for_city(data)
+    
+    print("\n" + "="*50)
+    print("✅ Dashboard Complete!")
+    print("="*50)
+
+
+def main():
+    """Main function to run the program"""
+    
+    print("Welcome to the Weather Dashboard!")
+    print("\nEnter cities separated by commas (e.g., London, Paris, Tokyo)")
+    
+    # Ask user for cities
+    user_input = input("Cities: ")
+    
+    # Split the input into a list and remove extra spaces
+    city_list = [city.strip() for city in user_input.split(",")]
+    
+    # Create and display the dashboard
+    create_weather_dashboard(city_list)
+
+
+# Run the program
+if __name__ == "__main__":
+    main()
+
+
+
+
+Me: In def main(), I want to add a function where it scan the string, and return error and ask user to input correct format if they input wrong format
+
+
+
+
+Claude:
+Great idea! Let me add input validation to check if the user enters the cities in the correct format:Perfect! I've added input validation. Here's what the new code does:
+
+
+**The validation function checks for:**
+
+
+• **Empty input** - If user presses Enter without typing anything
+
+
+• **Only numbers** - Rejects inputs like "123, 456" since city names aren't just numbers
+
+
+• **Special characters** - Blocks symbols like !@#$%^&* that don't belong in city names
+
+
+• **Empty city names** - Catches mistakes like "London,, Paris" (two commas in a row)
+
+
+• **Too short names** - Rejects single letters like "a" or "b"
+
+
+**How it works:**
+
+
+1. User types in cities
+2. The `validate_city_input()` function checks if it's correct
+3. If **valid** → returns `True` and the list of cities
+4. If **invalid** → returns `False` and an error message
+5. The `while True:` loop keeps asking until they get it right
+
+
+**Example of what happens:**
+- User types: `"London,, Paris"` → Error: "You have empty city names. Check your commas!"
+- User types: `"123"` → Error: "City names cannot be only numbers!"
+- User types: `""` → Error: "You didn't enter anything!"
+- User types: `"London, Paris"` → ✅ Works perfectly!
+
+
+Now your program won't crash from bad input! Want to add any other checks? 🛡️
+
+
+Me: Now let's move on to the visualization functions with me. I want to create a temperature visualisation based on the 5 days forecast created. Here's my scaffold:
+# Define create_temperature_visualisation() and create_precipitation_visualisation() here
+def create_temperature_visualisation(weather_data, output_type='display'):
+    """
+    Create visualisation of temperature data.
+
+
+    Args:
+        weather_data (dict): The processed weather data
+        output_type (str): Either 'display' to show in notebook or 'figure' to return the figure
+
+
+    Returns:
+        If output_type is 'figure', returns the matplotlib figure object
+        Otherwise, displays the visualisation in the notebook
+    """
+    pass
+
+
+Claude:
+Great! Let's create a temperature visualization together. I'll help you build this step by step.
+python
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+
+def create_temperature_visualisation(weather_data, output_type='display'):
+    """
+    Create visualisation of temperature data.
+    
+    Args:
+        weather_data (dict): The processed weather data
+        output_type (str): Either 'display' to show in notebook or 'figure' to return the figure
+        
+    Returns:
+        If output_type is 'figure', returns the matplotlib figure object
+        Otherwise, displays the visualisation in the notebook
+    """
+    
+    # Make sure we have data to work with
+    if not weather_data:
+        print("No weather data to visualize!")
+        return None
+    
+    # Pull out the data we need for the graph
+    dates = []
+    temps = []
+    temp_max = []
+    temp_min = []
+    
+    # Go through each forecast and grab one per day (noon forecasts)
+    current_date = None
+    for item in weather_data['list']:
+        # Parse the date
+        date_time = datetime.strptime(item['dt_txt'], '%Y-%m-%d %H:%M:%S')
+        date = date_time.date()
+        
+        # Only use noon forecasts (one per day)
+        if date != current_date and date_time.hour == 12:
+            current_date = date
+            dates.append(date.strftime('%a\n%b %d'))  # Format: "Mon\nJan 15"
+            temps.append(item['main']['temp'])
+            temp_max.append(item['main']['temp_max'])
+            temp_min.append(item['main']['temp_min'])
+    
+    # Create the figure and graph
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Plot the three temperature lines
+    ax.plot(dates, temps, marker='o', linewidth=2, label='Temperature', color='#FF6B6B', markersize=8)
+    ax.plot(dates, temp_max, marker='^', linewidth=1.5, linestyle='--', label='High', color='#FFA500', markersize=6)
+    ax.plot(dates, temp_min, marker='v', linewidth=1.5, linestyle='--', label='Low', color='#4ECDC4', markersize=6)
+    
+    # Fill the area between max and min temps
+    ax.fill_between(range(len(dates)), temp_min, temp_max, alpha=0.2, color='gray')
+    
+    # Make it look nice
+    city = weather_data['city']['name']
+    ax.set_title(f'5-Day Temperature Forecast for {city}', fontsize=16, fontweight='bold', pad=20)
+    ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Temperature (°C)', fontsize=12, fontweight='bold')
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3, linestyle='--')
+    
+    # Add the actual temperature values on the main line
+    for i, temp in enumerate(temps):
+        ax.text(i, temp + 1, f'{temp:.1f}°C', ha='center', fontsize=9)
+    
+    # Make it tight and neat
+    plt.tight_layout()
+    
+    # Return or display based on what they asked for
+    if output_type == 'figure':
+        return fig
+    else:
+        plt.show()
+        return None
+
+
+
+
+def create_precipitation_visualisation(weather_data, output_type='display'):
+    """
+    Create visualisation of precipitation/rain data.
+    
+    Args:
+        weather_data (dict): The processed weather data
+        output_type (str): Either 'display' to show in notebook or 'figure' to return the figure
+        
+    Returns:
+        If output_type is 'figure', returns the matplotlib figure object
+        Otherwise, displays the visualisation in the notebook
+    """
+    
+    # Make sure we have data
+    if not weather_data:
+        print("No weather data to visualize!")
+        return None
+    
+    # Collect precipitation data
+    dates = []
+    rain_amounts = []
+    
+    # Go through forecasts and grab noon data
+    current_date = None
+    for item in weather_data['list']:
+        date_time = datetime.strptime(item['dt_txt'], '%Y-%m-%d %H:%M:%S')
+        date = date_time.date()
+        
+        # Only noon forecasts
+        if date != current_date and date_time.hour == 12:
+            current_date = date
+            dates.append(date.strftime('%a\n%b %d'))
+            
+            # Get rain amount (might not exist if no rain)
+            rain = item.get('rain', {}).get('3h', 0)  # Rain in last 3 hours
+            rain_amounts.append(rain)
+    
+    # Create the bar chart
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Make bars with color based on amount
+    colors = ['#3498db' if r > 0 else '#95a5a6' for r in rain_amounts]
+    bars = ax.bar(dates, rain_amounts, color=colors, edgecolor='black', linewidth=1.2)
+    
+    # Make it pretty
+    city = weather_data['city']['name']
+    ax.set_title(f'5-Day Precipitation Forecast for {city}', fontsize=16, fontweight='bold', pad=20)
+    ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Precipitation (mm)', fontsize=12, fontweight='bold')
+    ax.grid(True, axis='y', alpha=0.3, linestyle='--')
+    
+    # Add values on top of bars
+    for i, (bar, amount) in enumerate(zip(bars, rain_amounts)):
+        if amount > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, amount + 0.1, 
+                   f'{amount:.1f}mm', ha='center', fontsize=9)
+    
+    # Set y-axis to start at 0
+    ax.set_ylim(bottom=0)
+    
+    plt.tight_layout()
+    
+    # Return or display
+    if output_type == 'figure':
+        return fig
+    else:
+        plt.show()
+        return None
+Me: No, we already have the weather data in the previous cell. Instead, try converting the previous cell's data into a table using df = pd.DataFrame(data) , then visualize the data table in the visualization cell.
+
+
+Claude:
+Great idea! Let's modify the approach to use pandas DataFrame. First, let's create a function to convert the weather data into a DataFrame, then visualize from that.
+Step 1: Add this function to process weather data into a DataFrame
+python
+import pandas as pd
+from datetime import datetime
+
+
+def process_weather_to_dataframe(weather_data):
+    """
+    Convert OpenWeatherMap data into a pandas DataFrame.
+    
+    Args:
+        weather_data (dict): Weather data from OpenWeatherMap
+        
+    Returns:
+        pandas.DataFrame: Processed weather data
+    """
+    
+    # Make sure we have data
+    if not weather_data:
+        print("No weather data available!")
+        return None
+    
+    # Lists to store our data
+    dates = []
+    days = []
+    temps = []
+    temp_max = []
+    temp_min = []
+    feels_like = []
+    humidity = []
+    conditions = []
+    rain = []
+    wind_speed = []
+    
+    # Go through each forecast entry (only noon ones for daily forecast)
+    current_date = None
+    for item in weather_data['list']:
+        # Parse the date/time
+        date_time = datetime.strptime(item['dt_txt'], '%Y-%m-%d %H:%M:%S')
+        date = date_time.date()
+        
+        # Only grab noon forecasts to avoid duplicates
+        if date != current_date and date_time.hour == 12:
+            current_date = date
+            
+            # Extract all the weather info
+            dates.append(date)
+            days.append(date.strftime('%A'))  # Day name like "Monday"
+            temps.append(item['main']['temp'])
+            temp_max.append(item['main']['temp_max'])
+            temp_min.append(item['main']['temp_min'])
+            feels_like.append(item['main']['feels_like'])
+            humidity.append(item['main']['humidity'])
+            conditions.append(item['weather'][0]['description'])
+            rain.append(item.get('rain', {}).get('3h', 0))  # Rain in mm
+            wind_speed.append(item['wind']['speed'])
+    
+    # Create the DataFrame
+    df = pd.DataFrame({
+        'Date': dates,
+        'Day': days,
+        'Temperature (°C)': temps,
+        'High (°C)': temp_max,
+        'Low (°C)': temp_min,
+        'Feels Like (°C)': feels_like,
+        'Condition': conditions,
+        'Humidity (%)': humidity,
+        'Rain (mm)': rain,
+        'Wind Speed (m/s)': wind_speed
+    })
+    
+    return df
+Step 2: Update visualization functions to work with DataFrame
+python
+import matplotlib.pyplot as plt
+
+
+def create_temperature_visualisation(df, output_type='display'):
+    """
+    Create visualisation of temperature data from DataFrame.
+    
+    Args:
+        df (pandas.DataFrame): Weather data as DataFrame
+        output_type (str): Either 'display' to show in notebook or 'figure' to return the figure
+        
+    Returns:
+        If output_type is 'figure', returns the matplotlib figure object
+        Otherwise, displays the visualisation in the notebook
+    """
+    
+    # Make sure we have data
+    if df is None or df.empty:
+        print("No data to visualize!")
+        return None
+    
+    # Create labels for x-axis (combine Day and Date)
+    date_labels = [f"{day}\n{date.strftime('%b %d')}" 
+                   for day, date in zip(df['Day'], df['Date'])]
+    
+    # Create the figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Plot the temperature lines
+    ax.plot(date_labels, df['Temperature (°C)'], 
+            marker='o', linewidth=2.5, label='Temperature', 
+            color='#FF6B6B', markersize=10)
+    ax.plot(date_labels, df['High (°C)'], 
+            marker='^', linewidth=1.5, linestyle='--', label='High', 
+            color='#FFA500', markersize=7)
+    ax.plot(date_labels, df['Low (°C)'], 
+            marker='v', linewidth=1.5, linestyle='--', label='Low', 
+            color='#4ECDC4', markersize=7)
+    
+    # Fill area between high and low
+    ax.fill_between(range(len(df)), df['Low (°C)'], df['High (°C)'], 
+                     alpha=0.2, color='lightgray')
+    
+    # Styling
+    ax.set_title('5-Day Temperature Forecast', fontsize=16, fontweight='bold', pad=20)
+    ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Temperature (°C)', fontsize=12, fontweight='bold')
+    ax.legend(loc='best', fontsize=11)
+    ax.grid(True, alpha=0.3, linestyle='--')
+    
+    # Add temperature values on the points
+    for i, temp in enumerate(df['Temperature (°C)']):
+        ax.text(i, temp + 1.5, f'{temp:.1f}°C', 
+                ha='center', fontsize=9, fontweight='bold')
+    
+    plt.tight_layout()
+    
+    # Return or display
+    if output_type == 'figure':
+        return fig
+    else:
+        plt.show()
+        return None
+
+
+
+
+def create_precipitation_visualisation(df, output_type='display'):
+    """
+    Create visualisation of precipitation data from DataFrame.
+    
+    Args:
+        df (pandas.DataFrame): Weather data as DataFrame
+        output_type (str): Either 'display' to show in notebook or 'figure' to return the figure
+        
+    Returns:
+        If output_type is 'figure', returns the matplotlib figure object
+        Otherwise, displays the visualisation in the notebook
+    """
+    
+    # Make sure we have data
+    if df is None or df.empty:
+        print("No data to visualize!")
+        return None
+    
+    # Create labels for x-axis
+    date_labels = [f"{day}\n{date.strftime('%b %d')}" 
+                   for day, date in zip(df['Day'], df['Date'])]
+    
+    # Create the figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Color bars based on rain amount
+    colors = ['#3498db' if r > 0 else '#95a5a6' for r in df['Rain (mm)']]
+    bars = ax.bar(date_labels, df['Rain (mm)'], 
+                  color=colors, edgecolor='black', linewidth=1.2, width=0.6)
+    
+    # Styling
+    ax.set_title('5-Day Precipitation Forecast', fontsize=16, fontweight='bold', pad=20)
+    ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Precipitation (mm)', fontsize=12, fontweight='bold')
+    ax.grid(True, axis='y', alpha=0.3, linestyle='--')
+    
+    # Add values on bars if there's rain
+    for i, (bar, amount) in enumerate(zip(bars, df['Rain (mm)'])):
+        if amount > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, amount + 0.1, 
+                   f'{amount:.1f}mm', ha='center', fontsize=9, fontweight='bold')
+        else:
+            # Show "No rain" for zero amounts
+            ax.text(bar.get_x() + bar.get_width()/2, 0.2, 
+                   'No rain', ha='center', fontsize=8, style='italic', color='gray')
+    
+    # Start y-axis at 0
+    ax.set_ylim(bottom=0)
+    
+    plt.tight_layout()
+    
+    # Return or display
+    if output_type == 'figure':
+        return fig
+    else:
+        plt.show()
+        return None
+Me: No, the current visualization function is by default taking Las Vegas as the location, despite the previous get weather data getting user's input location. Suggest ways to fix this.
+
+
+Claude:
+Ah, I see the issue! The problem is that you're probably running the visualization functions without passing the weather variable from the previous cell, so it might be using some old cached data or default data.
+Here are the ways to fix this:
+Solution 1: Make sure you're passing the correct weather variable
+python
+# Cell 1: Get weather data with user input
+API_KEY = "8c9d00096e85ca3599502e89d125af21"
+
+
+location = get_user_choice()  # User types their city
+weather = get_weather_data_openweather(location, forecast_days=5, api_key=API_KEY)
+display_weather(weather)
+
+
+# Cell 2: Visualize - make sure to use the SAME 'weather' variable
+create_temperature_visualisation(weather)  # Pass the 'weather' from above
+create_precipitation_visualisation(weather)  # Pass the 'weather' from above
+Solution 2: Combine everything in one cell
+python
+# Everything in one cell to avoid variable confusion
+def main():
+    API_KEY = "8c9d00096e85ca3599502e89d125af21"
+    
+    # Get user's city choice
+    location = get_user_choice()
+    
+    # Get weather data
+    weather = get_weather_data_openweather(location, forecast_days=5, api_key=API_KEY)
+    
+    # Display weather info
+    if weather:
+        display_weather(weather)
+        
+        # Create visualizations
+        print("\n📊 Creating visualizations...\n")
+        create_temperature_visualisation(weather)
+        create_precipitation_visualisation(weather)
+    else:
+        print("Could not retrieve weather data. Please try again.")
+
+
+# Run it
+main()
+Solution 3: Debug - Print what city the visualization is using
+Add a print statement at the start of your visualization function to see what city it's actually getting:
+python
+def create_temperature_visualisation(weather_data, output_type='display'):
+    """
+    Create visualisation of temperature data.
+    
+    Args:
+        weather_data (dict): The processed weather data
+        output_type (str): Either 'display' to show in notebook or 'figure' to return the figure
+        
+    Returns:
+        If output_type is 'figure', returns the matplotlib figure object
+        Otherwise, displays the visualisation in the notebook
+    """
+    
+    # Make sure we have data
+    if not weather_data:
+        print("No weather data to visualize!")
+        return None
+    
+    # DEBUG: Print what city we're visualizing
+    city = weather_data['city']['name']
+    print(f"🔍 DEBUG: Creating visualization for {city}")
+    
+    # ... rest of your code
+Solution 4: Check if you have multiple 'weather' variables
+In Google Colab, if you run cells out of order, you might have old variables. Try this:
+python
+# At the start of your visualization cell, check what you have
+print(f"Current weather variable is for: {weather['city']['name']}")
+print(f"Country: {weather['city']['country']}")
+
+
+# Then run your visualizations
+create_temperature_visualisation(weather)
+create_precipitation_visualisation(weather)
+Most likely cause:
+You probably have something like this:
+python
+# Cell 1
+location = get_user_choice()  # User enters "Paris"
+weather = get_weather_data_openweather(location, forecast_days=5, api_key=API_KEY)
+
+
+# Cell 2 - ran this BEFORE running Cell 1, so it uses old 'weather' variable
+create_temperature_visualisation(weather)  # Uses old Las Vegas data
+Quick fix:
+Run your cells in this exact order:
+1. First cell: Get user input and fetch weather data
+2. Second cell: Create visualizations
+Or better yet, restart your runtime and run everything fresh:
+python
+# In Colab menu: Runtime → Restart runtime
+# Then run all cells in order
+Can you try adding this at the top of your visualization cell and tell me what it prints?
+python
+# Add this before your visualization functions
+print(f"✅ Weather data is for: {weather['city']['name']}, {weather['city']['country']}")
+This will help us figure out if the problem is with the variable or something else!

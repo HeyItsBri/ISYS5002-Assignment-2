@@ -1,0 +1,689 @@
+﻿====
+
+
+Before and after improved prompting codes
+
+
+====
+
+
+Tool used: Claude
+Time: 10/10/2025
+
+
+===
+
+
+Summary:
+In this example, I started with a simple prompt asking Claude to create 2 functions for the Natural Language Weather Question cell. After receiving the initial code, I analysed it for improvement areas. I found the issues with the initial code being:
+* Weak city extraction logic, which can fail for multi-word city names
+* The code assumes there will be fixed weather data structure
+* Limited time phrase detection, might not be able to detect other phrases such as "next Friday" or "in five days"
+* No error handling for parsed data
+
+
+I then created a follow-up prompt based on these issues, and asked for Claude to fix it. 
+My follow-up prompt was effective because:
+* I identified and pointed out the issues that Claude’s initial code had
+* I requested specific area to improve
+* I suggested using Olama for a better natural language model
+* I asked for better error handling at specific areas
+
+
+This strategy guided Claude to create a code that:
+* Use Olama but also has a rule-based parse in case API does not respond
+* Extracts user’s input better
+* Can handle more flexible data structures
+* Can calculate day units to be more flexible with user’s questions
+* Overall created a more robust code
+
+
+===
+
+
+
+
+Me: Help me create 2 functions to parse natural language weather questions. The functions are parse_weather_question() and generate_weather_response()
+
+
+Before code:
+def parse_weather_question(question):
+    """
+    Parse a natural language weather question and extract key information.
+    
+    Args:
+        question (str): The user's weather question
+        
+    Returns:
+        dict: Contains 'city', 'query_type', and 'time_frame'
+    """
+    
+    # Convert to lowercase for easier matching
+    question_lower = question.lower()
+    
+    # Initialize result dictionary
+    result = {
+        'city': None,
+        'query_type': None,
+        'time_frame': 'current'
+    }
+    
+    # Keywords for different query types
+    temp_keywords = ['temperature', 'temp', 'hot', 'cold', 'warm', 'cool', 'degrees']
+    rain_keywords = ['rain', 'rainy', 'raining', 'rainfall', 'precipitation']
+    wind_keywords = ['wind', 'windy', 'breeze', 'breezy']
+    humidity_keywords = ['humidity', 'humid', 'moisture']
+    condition_keywords = ['weather', 'conditions', 'like', 'sunny', 'cloudy', 'clear']
+    forecast_keywords = ['tomorrow', 'forecast', 'next', 'future', 'upcoming', 'later', 'week']
+    
+    # Determine query type
+    if any(keyword in question_lower for keyword in temp_keywords):
+        result['query_type'] = 'temperature'
+    elif any(keyword in question_lower for keyword in rain_keywords):
+        result['query_type'] = 'rain'
+    elif any(keyword in question_lower for keyword in wind_keywords):
+        result['query_type'] = 'wind'
+    elif any(keyword in question_lower for keyword in humidity_keywords):
+        result['query_type'] = 'humidity'
+    elif any(keyword in question_lower for keyword in condition_keywords):
+        result['query_type'] = 'conditions'
+    else:
+        result['query_type'] = 'general'
+    
+    # Determine time frame
+    if any(keyword in question_lower for keyword in forecast_keywords):
+        result['time_frame'] = 'forecast'
+    else:
+        result['time_frame'] = 'current'
+    
+    # Extract city name - look for common patterns
+    # Pattern 1: "in [city]"
+    if ' in ' in question_lower:
+        parts = question_lower.split(' in ')
+        if len(parts) > 1:
+            city_part = parts[1].strip()
+            # Take the first word/phrase after "in"
+            result['city'] = city_part.split()[0].strip('?.,!').title()
+    
+    # Pattern 2: "at [city]" or "[city]'s weather"
+    elif ' at ' in question_lower:
+        parts = question_lower.split(' at ')
+        if len(parts) > 1:
+            city_part = parts[1].strip()
+            result['city'] = city_part.split()[0].strip('?.,!').title()
+    
+    # Pattern 3: City at the end of question
+    else:
+        words = question_lower.strip('?.,!').split()
+        if len(words) > 0:
+            # Take the last word as potential city
+            potential_city = words[-1].title()
+            # Only accept if it looks like a city name (starts with capital)
+            if len(potential_city) > 2:
+                result['city'] = potential_city
+    
+    return result
+
+
+
+
+def generate_weather_response(parsed_data, weather_data):
+    """
+    Generate a natural language response based on parsed question and weather data.
+    
+    Args:
+        parsed_data (dict): Output from parse_weather_question()
+        weather_data (dict): Weather data from get_weather_data_openweather()
+        
+    Returns:
+        str: Natural language response
+    """
+    
+    if not weather_data or 'current' not in weather_data:
+        return "Sorry, I couldn't get the weather data for that location."
+    
+    current = weather_data['current']
+    city_name = current['name']
+    country = current['sys']['country']
+    
+    # Extract weather information
+    temp = current['main']['temp']
+    feels_like = current['main']['feels_like']
+    humidity = current['main']['humidity']
+    wind_speed = current['wind']['speed']
+    description = current['weather'][0]['description']
+    
+    # Generate response based on query type
+    query_type = parsed_data['query_type']
+    time_frame = parsed_data['time_frame']
+    
+    if time_frame == 'forecast' and 'forecast' in weather_data:
+        # Get tomorrow's forecast (first noon forecast)
+        forecast_list = weather_data['forecast']['list']
+        tomorrow_data = None
+        
+        from datetime import datetime
+        for item in forecast_list:
+            date_time = datetime.strptime(item['dt_txt'], '%Y-%m-%d %H:%M:%S')
+            if date_time.hour == 12:
+                tomorrow_data = item
+                break
+        
+        if tomorrow_data:
+            tomorrow_temp = tomorrow_data['main']['temp']
+            tomorrow_desc = tomorrow_data['weather'][0]['description']
+            tomorrow_rain = tomorrow_data.get('rain', {}).get('3h', 0)
+            
+            if query_type == 'temperature':
+                return f"Tomorrow in {city_name}, {country}, the temperature will be around {tomorrow_temp}°C with {tomorrow_desc}."
+            elif query_type == 'rain':
+                if tomorrow_rain > 0:
+                    return f"Yes, rain is expected in {city_name} tomorrow. About {tomorrow_rain}mm of rainfall with {tomorrow_desc}."
+                else:
+                    return f"No rain is expected in {city_name} tomorrow. It should be {tomorrow_desc}."
+            else:
+                return f"Tomorrow in {city_name}, expect {tomorrow_desc} with a temperature of {tomorrow_temp}°C."
+    
+    # Current weather responses
+    if query_type == 'temperature':
+        return f"The current temperature in {city_name}, {country} is {temp}°C. It feels like {feels_like}°C."
+    
+    elif query_type == 'rain':
+        if 'rain' in current and current['rain'].get('1h', 0) > 0:
+            return f"Yes, it's currently raining in {city_name}. The conditions are {description}."
+        else:
+            return f"No, it's not raining in {city_name} right now. The weather is {description}."
+    
+    elif query_type == 'wind':
+        return f"The wind speed in {city_name} is {wind_speed} m/s."
+    
+    elif query_type == 'humidity':
+        return f"The humidity in {city_name} is {humidity}%."
+    
+    elif query_type == 'conditions':
+        return f"The weather in {city_name}, {country} is currently {description} with a temperature of {temp}°C."
+    
+    else:
+        # General response
+        return f"In {city_name}, {country}: {description.title()}, {temp}°C (feels like {feels_like}°C), humidity {humidity}%, wind {wind_speed} m/s."
+
+
+
+
+# Example usage:
+# question = "What's the temperature in London?"
+# parsed = parse_weather_question(question)
+# print("Parsed data:", parsed)
+
+
+# weather_data = get_weather_data_openweather(parsed['city'])
+# response = generate_weather_response(parsed, weather_data)
+# print("Response:", response)
+
+
+
+
+My follow-up prompt is:
+Here are my suggestions:
+1. Can use Olama API
+2. Weak city extraction logic, which can fails for multi-word city names
+3. Assumes fixed weather data structure
+4. Limited time frame detection, might not be able to detect other phrases such as "next Friday" or "in five days"
+5. Inconsistent error handling for parsed data
+
+
+Claude’s code after:
+import re
+from datetime import datetime, timedelta
+
+
+def parse_weather_question(question, use_ollama=False, ollama_model="llama2"):
+    """
+    Parse a natural language weather question and extract key information.
+    
+    Args:
+        question (str): The user's weather question
+        use_ollama (bool): Whether to use Ollama API for better parsing
+        ollama_model (str): Ollama model to use (e.g., "llama2", "mistral")
+        
+    Returns:
+        dict: Contains 'city', 'query_type', 'time_frame', 'days_ahead', 'success', 'error'
+    """
+    
+    # Initialize result dictionary with error handling
+    result = {
+        'city': None,
+        'query_type': None,
+        'time_frame': 'current',
+        'days_ahead': 0,
+        'success': False,
+        'error': None
+    }
+    
+    try:
+        # Use Ollama API if requested
+        if use_ollama:
+            result = parse_with_ollama(question, ollama_model)
+            if result['success']:
+                return result
+            # If Ollama fails, fall back to rule-based parsing
+            print("⚠️ Ollama parsing failed, using rule-based parsing...")
+        
+        # Convert to lowercase for easier matching
+        question_lower = question.lower().strip()
+        
+        if not question_lower:
+            result['error'] = "Empty question provided"
+            return result
+        
+        # Keywords for different query types
+        query_keywords = {
+            'temperature': ['temperature', 'temp', 'hot', 'cold', 'warm', 'cool', 'degrees', 'celsius', 'fahrenheit'],
+            'rain': ['rain', 'rainy', 'raining', 'rainfall', 'precipitation', 'drizzle', 'shower'],
+            'wind': ['wind', 'windy', 'breeze', 'breezy', 'gust'],
+            'humidity': ['humidity', 'humid', 'moisture', 'damp'],
+            'conditions': ['weather', 'conditions', 'like', 'sunny', 'cloudy', 'clear', 'forecast']
+        }
+        
+        # Determine query type
+        result['query_type'] = 'general'
+        for qtype, keywords in query_keywords.items():
+            if any(keyword in question_lower for keyword in keywords):
+                result['query_type'] = qtype
+                break
+        
+        # Advanced time frame detection
+        time_result = detect_time_frame(question_lower)
+        result['time_frame'] = time_result['time_frame']
+        result['days_ahead'] = time_result['days_ahead']
+        
+        # Extract city name with improved logic
+        city = extract_city_name(question)
+        if city:
+            result['city'] = city
+            result['success'] = True
+        else:
+            result['error'] = "Could not identify city name in question"
+            result['success'] = False
+        
+    except Exception as e:
+        result['error'] = f"Error parsing question: {str(e)}"
+        result['success'] = False
+    
+    return result
+
+
+
+
+def parse_with_ollama(question, model="llama2"):
+    """
+    Use Ollama API to parse natural language weather questions.
+    
+    Args:
+        question (str): The user's weather question
+        model (str): Ollama model to use
+        
+    Returns:
+        dict: Parsed data with city, query_type, time_frame
+    """
+    try:
+        import requests
+        
+        # Ollama API endpoint (default local installation)
+        url = "http://localhost:11434/api/generate"
+        
+        # Create a prompt for Ollama to extract information
+        prompt = f"""Extract the following information from this weather question:
+Question: "{question}"
+
+
+Respond ONLY with a JSON object in this exact format:
+{{"city": "city name", "query_type": "temperature/rain/wind/humidity/conditions/general", "time_frame": "current/forecast", "days_ahead": 0}}
+
+
+Examples:
+"What's the weather in New York?" -> {{"city": "New York", "query_type": "conditions", "time_frame": "current", "days_ahead": 0}}
+"Will it rain tomorrow in Los Angeles?" -> {{"city": "Los Angeles", "query_type": "rain", "time_frame": "forecast", "days_ahead": 1}}
+
+
+Now extract from the question above:"""
+        
+        # Call Ollama API
+        response = requests.post(url, json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False
+        })
+        
+        if response.status_code == 200:
+            import json
+            result_text = response.json().get('response', '')
+            
+            # Try to parse JSON from response
+            parsed = json.loads(result_text)
+            parsed['success'] = True
+            parsed['error'] = None
+            return parsed
+        else:
+            return {'success': False, 'error': f"Ollama API error: {response.status_code}"}
+            
+    except Exception as e:
+        return {'success': False, 'error': f"Ollama error: {str(e)}"}
+
+
+
+
+def detect_time_frame(question_lower):
+    """
+    Detect time frame from question with support for various phrases.
+    
+    Args:
+        question_lower (str): Lowercase question text
+        
+    Returns:
+        dict: Contains 'time_frame' and 'days_ahead'
+    """
+    
+    result = {'time_frame': 'current', 'days_ahead': 0}
+    
+    # Day name mapping
+    days_of_week = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    
+    # Check for specific time phrases
+    time_patterns = [
+        (r'tomorrow', 1),
+        (r'in (\d+) days?', None),  # "in 3 days"
+        (r'(\d+) days? (from now|later)', None),  # "3 days from now"
+        (r'next (\w+)', None),  # "next Friday"
+        (r'this (\w+)', None),  # "this Friday"
+    ]
+    
+    for pattern, days in time_patterns:
+        match = re.search(pattern, question_lower)
+        if match:
+            result['time_frame'] = 'forecast'
+            
+            if days is not None:
+                result['days_ahead'] = days
+            elif pattern.startswith(r'in (\d+)') or pattern.startswith(r'(\d+)'):
+                result['days_ahead'] = int(match.group(1))
+            elif 'next' in pattern or 'this' in pattern:
+                day_name = match.group(1)
+                if day_name in days_of_week:
+                    result['days_ahead'] = calculate_days_until(day_name)
+            
+            return result
+    
+    # Check for general forecast keywords
+    forecast_keywords = ['forecast', 'future', 'upcoming', 'later', 'week', 'will']
+    if any(keyword in question_lower for keyword in forecast_keywords):
+        result['time_frame'] = 'forecast'
+        result['days_ahead'] = 1  # Default to tomorrow
+    
+    return result
+
+
+
+
+def calculate_days_until(target_day):
+    """
+    Calculate days until a specific day of the week.
+    
+    Args:
+        target_day (str): Day name (e.g., "friday")
+        
+    Returns:
+        int: Number of days ahead
+    """
+    days_of_week = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    
+    today = datetime.now()
+    current_day_index = today.weekday()
+    target_day_index = days_of_week.index(target_day.lower())
+    
+    # Calculate days ahead
+    days_ahead = (target_day_index - current_day_index) % 7
+    if days_ahead == 0:
+        days_ahead = 7  # Next week same day
+    
+    return days_ahead
+
+
+
+
+def extract_city_name(question):
+    """
+    Extract city name from question with support for multi-word cities.
+    
+    Args:
+        question (str): The weather question
+        
+    Returns:
+        str: City name or None
+    """
+    
+    # Common multi-word cities to check for
+    known_cities = [
+        'New York', 'Los Angeles', 'San Francisco', 'Las Vegas', 'New Orleans',
+        'Salt Lake City', 'Kansas City', 'Oklahoma City', 'Jersey City',
+        'Mexico City', 'Buenos Aires', 'Rio de Janeiro', 'Sao Paulo',
+        'Hong Kong', 'Kuala Lumpur', 'New Delhi', 'Abu Dhabi', 'Tel Aviv',
+        'Cape Town', 'Port Elizabeth', 'East London'
+    ]
+    
+    # Check for known multi-word cities first
+    question_title = question.title()
+    for city in known_cities:
+        if city in question_title:
+            return city
+    
+    # Pattern-based extraction
+    patterns = [
+        r'\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "in New York"
+        r'\bat\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "at Los Angeles"
+        r'\bfor\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "for San Francisco"
+        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+weather',  # "London weather"
+        r'weather\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "weather in Paris"
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, question)
+        if match:
+            city = match.group(1).strip()
+            # Filter out common words that aren't cities
+            excluded_words = ['Today', 'Tomorrow', 'The', 'What', 'How', 'Is', 'Will', 'Weather']
+            if city not in excluded_words:
+                return city
+    
+    # Last resort: look for capitalized words
+    words = question.split()
+    potential_cities = []
+    
+    for i, word in enumerate(words):
+        # Remove punctuation
+        clean_word = word.strip('?.,!;:')
+        
+        if clean_word and clean_word[0].isupper() and len(clean_word) > 2:
+            # Check if it's part of a multi-word city
+            if i < len(words) - 1:
+                next_word = words[i + 1].strip('?.,!;:')
+                if next_word and len(next_word) > 0 and next_word[0].isupper():
+                    potential_cities.append(f"{clean_word} {next_word}")
+                    continue
+            
+            potential_cities.append(clean_word)
+    
+    # Return the most likely city (prefer multi-word cities)
+    if potential_cities:
+        return max(potential_cities, key=len)
+    
+    return None
+
+
+
+
+def generate_weather_response(parsed_data, weather_data):
+    """
+    Generate a natural language response based on parsed question and weather data.
+    
+    Args:
+        parsed_data (dict): Output from parse_weather_question()
+        weather_data (dict): Weather data from get_weather_data_openweather()
+        
+    Returns:
+        str: Natural language response
+    """
+    
+    # Error handling for parsed data
+    if not parsed_data.get('success', False):
+        error_msg = parsed_data.get('error', 'Unknown error')
+        return f"Sorry, I couldn't understand the question. {error_msg}"
+    
+    # Validate weather data structure
+    if not weather_data:
+        return "Sorry, I couldn't get the weather data."
+    
+    if 'current' not in weather_data:
+        return "Sorry, the weather data is incomplete or in an unexpected format."
+    
+    try:
+        current = weather_data['current']
+        city_name = current.get('name', parsed_data.get('city', 'Unknown'))
+        country = current.get('sys', {}).get('country', '')
+        
+        # Extract weather information with safe defaults
+        temp = current.get('main', {}).get('temp', 'N/A')
+        feels_like = current.get('main', {}).get('feels_like', 'N/A')
+        humidity = current.get('main', {}).get('humidity', 'N/A')
+        wind_speed = current.get('wind', {}).get('speed', 'N/A')
+        description = current.get('weather', [{}])[0].get('description', 'unknown')
+        
+        # Generate response based on query type and time frame
+        query_type = parsed_data.get('query_type', 'general')
+        time_frame = parsed_data.get('time_frame', 'current')
+        days_ahead = parsed_data.get('days_ahead', 0)
+        
+        # Handle forecast requests
+        if time_frame == 'forecast' and 'forecast' in weather_data:
+            return generate_forecast_response(
+                parsed_data, weather_data, city_name, country
+            )
+        
+        # Current weather responses
+        location_str = f"{city_name}, {country}" if country else city_name
+        
+        if query_type == 'temperature':
+            return f"The current temperature in {location_str} is {temp}°C. It feels like {feels_like}°C."
+        
+        elif query_type == 'rain':
+            rain_amount = current.get('rain', {}).get('1h', 0)
+            if rain_amount > 0:
+                return f"Yes, it's currently raining in {location_str}. About {rain_amount}mm in the last hour. The conditions are {description}."
+            else:
+                return f"No, it's not raining in {location_str} right now. The weather is {description}."
+        
+        elif query_type == 'wind':
+            return f"The wind speed in {location_str} is {wind_speed} m/s."
+        
+        elif query_type == 'humidity':
+            return f"The humidity in {location_str} is {humidity}%."
+        
+        elif query_type == 'conditions':
+            return f"The weather in {location_str} is currently {description} with a temperature of {temp}°C."
+        
+        else:
+            # General response
+            return f"In {location_str}: {description.title()}, {temp}°C (feels like {feels_like}°C), humidity {humidity}%, wind {wind_speed} m/s."
+    
+    except Exception as e:
+        return f"Sorry, I encountered an error processing the weather data: {str(e)}"
+
+
+
+
+def generate_forecast_response(parsed_data, weather_data, city_name, country):
+    """
+    Generate forecast response with support for specific days ahead.
+    
+    Args:
+        parsed_data (dict): Parsed question data
+        weather_data (dict): Weather data with forecast
+        city_name (str): City name
+        country (str): Country code
+        
+    Returns:
+        str: Forecast response
+    """
+    
+    try:
+        forecast_list = weather_data['forecast']['list']
+        days_ahead = parsed_data.get('days_ahead', 1)
+        query_type = parsed_data.get('query_type', 'general')
+        
+        # Find forecast for the target day
+        target_date = datetime.now() + timedelta(days=days_ahead)
+        target_forecast = None
+        
+        for item in forecast_list:
+            forecast_time = datetime.strptime(item['dt_txt'], '%Y-%m-%d %H:%M:%S')
+            
+            # Look for noon forecast on target day
+            if forecast_time.date() == target_date.date() and forecast_time.hour == 12:
+                target_forecast = item
+                break
+        
+        if not target_forecast and forecast_list:
+            # Fallback to closest available forecast
+            target_forecast = forecast_list[min(days_ahead * 8, len(forecast_list) - 1)]
+        
+        if target_forecast:
+            temp = target_forecast['main']['temp']
+            description = target_forecast['weather'][0]['description']
+            rain_amount = target_forecast.get('rain', {}).get('3h', 0)
+            wind_speed = target_forecast['wind']['speed']
+            humidity = target_forecast['main']['humidity']
+            
+            # Time phrase
+            if days_ahead == 1:
+                time_phrase = "tomorrow"
+            elif days_ahead == 0:
+                time_phrase = "today"
+            else:
+                time_phrase = f"in {days_ahead} days"
+            
+            location_str = f"{city_name}, {country}" if country else city_name
+            
+            if query_type == 'temperature':
+                return f"{time_phrase.capitalize()} in {location_str}, the temperature will be around {temp}°C with {description}."
+            elif query_type == 'rain':
+                if rain_amount > 0:
+                    return f"Yes, rain is expected in {location_str} {time_phrase}. About {rain_amount}mm of rainfall with {description}."
+                else:
+                    return f"No rain is expected in {location_str} {time_phrase}. It should be {description}."
+            elif query_type == 'wind':
+                return f"The wind speed {time_phrase} in {location_str} will be around {wind_speed} m/s."
+            elif query_type == 'humidity':
+                return f"The humidity {time_phrase} in {location_str} will be around {humidity}%."
+            else:
+                return f"{time_phrase.capitalize()} in {location_str}, expect {description} with a temperature of {temp}°C."
+        else:
+            return f"Sorry, I don't have forecast data available for {days_ahead} days ahead."
+    
+    except Exception as e:
+        return f"Sorry, I encountered an error processing the forecast: {str(e)}"
+
+
+
+
+# Example usage:
+# question = "What's the temperature in New York tomorrow?"
+# parsed = parse_weather_question(question, use_ollama=False)
+# print("Parsed data:", parsed)
+
+
+# if parsed['success']:
+#     weather_data = get_weather_data_openweather(parsed['city'])
+#     response = generate_weather_response(parsed, weather_data)
+#     print("Response:", response)
+# else:
+#     print("Error:", parsed['error'])
